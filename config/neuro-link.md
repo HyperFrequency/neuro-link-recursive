@@ -30,7 +30,7 @@ wiki_llm: claude-sonnet-4-6
 ontology_llm: claude-opus-4-6
 embedding_model: Octen-8B-4096
 vector_db: qdrant
-obsidian_vault: /Users/DanBot/Desktop/neuro-quant-vault
+obsidian_vault: /Users/DanBot/Vaults/neuro-quant-vault
 auto_curate: true
 auto_rag: true
 harness_bridge:

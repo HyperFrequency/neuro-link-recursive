@@ -37,6 +37,7 @@ dev = [
 ]
 ngrok = [
     "pyngrok>=7.2",
+    "flask>=3.0",
 ]
 graphiti = [
     "graphiti-core>=0.5",
@@ -52,6 +53,11 @@ nlr-crawl = "neuro_link_recursive.crawl:main"
 nlr-grade = "neuro_link_recursive.grade:main"
 nlr-heartbeat = "neuro_link_recursive.heartbeat:main"
 nlr-parallel-crawl = "neuro_link_recursive.parallel_crawl:main"
+nlr-ngrok = "neuro_link_recursive.ngrok_bridge:main"
+nlr-graph = "neuro_link_recursive.temporal_graph:main"
+nlr-kdense = "neuro_link_recursive.kdense_bridge:main"
+nlr-cloud = "neuro_link_recursive.cloud_dispatch:main"
+nlr-workflow = "neuro_link_recursive.workflow_state:main"
 
 [build-system]
 requires = ["uv_build>=0.9.16,<0.10.0"]

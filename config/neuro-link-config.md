@@ -37,8 +37,20 @@ mcp_servers:
   neo4j:
     type: bolt
     url: bolt://localhost:7687
+    user_env: NEO4J_USER
+    password_env: NEO4J_PASSWORD
+    database: neo4j
     required: false
     status: not_installed
+cloud_dispatch:
+  modal:
+    url: https://api.modal.com
+    token_env: MODAL_TOKEN_ID
+    secret_env: MODAL_TOKEN_SECRET
+  ray:
+    url: http://localhost:8265
+  dask:
+    url: http://localhost:8786
 permissions:
   auto_rag_inject: true
   auto_curate: true

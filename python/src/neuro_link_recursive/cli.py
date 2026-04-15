@@ -63,3 +63,18 @@ def grade(session: bool, wiki: bool):
         click.echo(json.dumps(grade_session(root), indent=2))
     if wiki:
         click.echo(json.dumps(grade_wiki(root), indent=2))
+
+
+# --- Phase 3 subcommand groups ---
+
+from .ngrok_bridge import ngrok_main
+from .temporal_graph import graph_main
+from .kdense_bridge import kdense_main
+from .cloud_dispatch import cloud_main
+from .workflow_state import workflow_main
+
+main.add_command(ngrok_main)
+main.add_command(graph_main)
+main.add_command(kdense_main)
+main.add_command(cloud_main)
+main.add_command(workflow_main)

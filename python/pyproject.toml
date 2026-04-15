@@ -1,0 +1,62 @@
+[project]
+name = "neuro-link-recursive"
+version = "0.1.0"
+description = "Python helpers for neuro-link-recursive: embeddings, crawling, grading, RAG pipeline, and MCP bridge utilities"
+readme = "README.md"
+authors = [
+    { name = "Dan Repaci", email = "danrepaci157@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    # Vector DB
+    "qdrant-client>=1.12",
+    # Embeddings — optional heavy dep, install separately if needed
+    # "sentence-transformers>=3.3",  # requires torch; install via: uv pip install sentence-transformers
+    # Knowledge graph
+    "neo4j>=5.25",
+    # Web crawling (Firecrawl client)
+    "firecrawl-py>=1.5",
+    # YAML frontmatter parsing
+    "pyyaml>=6.0",
+    "python-frontmatter>=1.1",
+    # HTTP / async
+    "httpx>=0.28",
+    "aiofiles>=24.1",
+    # CLI
+    "click>=8.1",
+    "rich>=13.9",
+    # Utilities
+    "python-dotenv>=1.0",
+    "watchfiles>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+ngrok = [
+    "pyngrok>=7.2",
+]
+graphiti = [
+    "graphiti-core>=0.5",
+]
+embeddings = [
+    "sentence-transformers>=3.3",
+]
+
+[project.scripts]
+nlr = "neuro_link_recursive.cli:main"
+nlr-embed = "neuro_link_recursive.embed:main"
+nlr-crawl = "neuro_link_recursive.crawl:main"
+nlr-grade = "neuro_link_recursive.grade:main"
+nlr-heartbeat = "neuro_link_recursive.heartbeat:main"
+nlr-parallel-crawl = "neuro_link_recursive.parallel_crawl:main"
+
+[build-system]
+requires = ["uv_build>=0.9.16,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

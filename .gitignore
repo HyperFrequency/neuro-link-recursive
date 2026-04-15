@@ -1,0 +1,32 @@
+# Secrets
+secrets/.env
+secrets/*.key
+
+# Rust build artifacts
+server/target/
+
+# Python
+python/.venv/
+python/__pycache__/
+python/*.egg-info/
+*.pyc
+
+# State files (runtime, not committed)
+state/session_log.jsonl
+state/score_history.jsonl
+state/deviation_log.jsonl
+state/auto-rag-index.json
+
+# OS
+.DS_Store
+*.swp
+*~
+
+# Ingested content (too large for git)
+00-raw/*/source.md
+00-raw/.hashes
+01-sorted/**/*.md
+!01-sorted/.gitkeep
+
+# Lock files
+python/uv.lock

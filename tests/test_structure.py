@@ -1,13 +1,11 @@
-"""Tests for repo structure, configs, and skills (20 tests).
+"""Tests for repo structure, configs, and skills (19 tests).
 
 These tests validate the actual repo on disk (not temp dirs).
 """
 
 from __future__ import annotations
 
-import importlib
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -184,26 +182,16 @@ def test_directory_structure_matches_prd():
         "skills",
         "hooks",
         "server",
-        "python",
     ]
     for d in required_dirs:
         assert (NLR_REPO / d).is_dir(), f"Missing directory: {d}"
 
 
 def test_rust_binary_exists():
-    binary = NLR_REPO / "server" / "target" / "release" / "neuro-link-mcp"
+    binary = NLR_REPO / "server" / "target" / "release" / "nlr"
     if not binary.exists():
         pytest.skip("Rust binary not built yet")
     assert os.access(binary, os.X_OK)
-
-
-# ---------------------------------------------------------------------------
-# 14-15. Python package
-# ---------------------------------------------------------------------------
-
-def test_python_package_importable():
-    spec = importlib.util.find_spec("neuro_link_recursive")
-    assert spec is not None, "neuro_link_recursive package not importable"
 
 
 def test_claude_md_has_rules():

@@ -7,7 +7,7 @@ Complete step-by-step guide to get neuro-link-recursive running from scratch. As
 ## Table of Contents
 
 1. [Rust Toolchain](#1-rust-toolchain)
-2. [Python 3.11+ via uv](#2-python-311-via-uv)
+2. [npm (for MCP distribution)](#2-npm-for-mcp-distribution)
 3. [Qdrant Vector DB](#3-qdrant-vector-db)
 4. [Neo4j Graph DB](#4-neo4j-graph-db)
 5. [Ngrok](#5-ngrok)
@@ -53,47 +53,21 @@ cd server
 cargo build --release
 ```
 
-The binary is at `server/target/release/neuro-link-mcp`.
+The binary is at `server/target/release/nlr`.
 
 ---
 
-## 2. Python 3.11+ via uv
+## 2. npm (for MCP distribution)
 
-The Python pipeline (`python/`) uses [uv](https://docs.astral.sh/uv/) for dependency management.
+npm is used to package and distribute the MCP server binary.
 
 ```bash
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install Node.js (includes npm) via Homebrew
+brew install node
 
 # Verify
-uv --version
-```
-
-Install the project and its dependencies:
-
-```bash
-cd python
-
-# Install all dependencies (creates .venv automatically)
-uv sync
-
-# Install dev dependencies (pytest, ruff)
-uv sync --extra dev
-
-# Optional: install embedding model support (requires ~2GB for PyTorch)
-uv sync --extra embeddings
-
-# Optional: install Graphiti (temporal knowledge graphs)
-uv sync --extra graphiti
-
-# Optional: install Ngrok Python bindings
-uv sync --extra ngrok
-```
-
-Verify the CLI works:
-
-```bash
-uv run nlr --help
+node --version
+npm --version
 ```
 
 ---
@@ -403,7 +377,7 @@ MODAL_TOKEN_ID=                     # Modal.com (if using cloud compute)
 MODAL_TOKEN_SECRET=
 ```
 
-The Python pipeline loads these automatically via `python-dotenv`. The Rust server reads them from the environment or from `secrets/.env` at startup.
+The Rust server reads these from the environment or from `secrets/.env` at startup.
 
 ---
 
@@ -423,8 +397,8 @@ make status
 # Rust server compiles
 cd server && cargo check && echo "OK: Rust" && cd ..
 
-# Python CLI works
-cd python && uv run nlr --help && echo "OK: Python" && cd ..
+# nlr binary exists
+test -x server/target/release/nlr && echo "OK: nlr binary"
 
 # Qdrant is reachable
 curl -sf http://localhost:6333/healthz && echo "OK: Qdrant"
@@ -465,7 +439,6 @@ See [SETUP.md](SETUP.md) for the full interactive setup guide.
 | Problem | Solution |
 |---------|----------|
 | `cargo build` fails | Ensure Rust 1.75+: `rustup update stable` |
-| `uv sync` fails | Ensure uv is installed: `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | Qdrant connection refused | Start container: `docker start qdrant` |
 | Neo4j connection refused | Start container: `docker start neo4j` |
 | MCP server not found | Verify `~/.claude.json` has the server config (steps 7-11) |
@@ -473,4 +446,3 @@ See [SETUP.md](SETUP.md) for the full interactive setup guide.
 | Permission denied on hook | Run `chmod +x ~/.claude/hooks/*.sh` |
 | InfraNodus 401 | Regenerate API key at https://infranodus.com/settings |
 | Firecrawl rate limit | Check crawl interval in `config/crawl-ingest-update.md` |
-| Import errors in Python | Run `cd python && uv sync` to reinstall deps |

@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 from typing import Generator
 
 import pytest
 
 NLR_REPO = Path(__file__).resolve().parent.parent
-DEFAULT_BINARY = NLR_REPO / "server" / "target" / "release" / "neuro-link-mcp"
+DEFAULT_BINARY = NLR_REPO / "server" / "target" / "release" / "nlr"
 
 
 def _mcp_binary() -> str:

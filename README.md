@@ -2,7 +2,7 @@
 
 Unified context, memory & behavior control plane for AI agent harnesses.
 
-A hybrid RAG + LLM-Wiki system with a Rust MCP server core and Python helper pipeline. Drop markdown files to define workflows, reasoning ontologies, and operational tasks — the system auto-generates skills, hooks, cron jobs, and monitors performance.
+A hybrid RAG + LLM-Wiki system with a pure Rust MCP server core. Drop markdown files to define workflows, reasoning ontologies, and operational tasks — the system auto-generates skills, hooks, cron jobs, and monitors performance.
 
 ## What It Does
 
@@ -29,7 +29,6 @@ graph TB
         MCP["Rust MCP Server<br/>(stdio / HTTP)"]
         SKILLS["16 Skills<br/>(SKILL.md)"]
         HOOKS["5 Hooks<br/>(bash)"]
-        PY["Python Pipeline<br/>(uv package)"]
     end
 
     subgraph "Knowledge Layers"
@@ -67,12 +66,11 @@ graph TB
     SKILLS --> ONT
     SKILLS --> RAW
     HOOKS --> WIKI
-    PY --> QDRANT
-    PY --> RAW
 
     MCP --> WIKI
     MCP --> ONT
     MCP --> AGENTS
+    MCP --> QDRANT
 
     WIKI --> QDRANT
     ONT --> INFRA
@@ -137,10 +135,7 @@ bash scripts/init.sh
 cp secrets/.env.example secrets/.env
 # Edit secrets/.env with your API keys
 
-# Install Python helpers
-cd python && uv sync && cd ..
-
-# Build Rust MCP server
+# Build the Rust MCP server + CLI
 cd server && cargo build --release && cd ..
 
 # Interactive setup
@@ -154,17 +149,8 @@ cd server && cargo build --release && cd ..
 
 ```
 neuro-link-recursive/
-├── server/                     Rust MCP server (cargo)
+├── server/                     Rust MCP server + CLI (cargo)
 │   └── src/                    MCP tools: wiki, RAG, ontology, tasks, harness
-├── python/                     Python helpers (uv package)
-│   └── src/neuro_link_recursive/
-│       ├── cli.py              CLI entry point
-│       ├── embed.py            Qdrant embedding pipeline
-│       ├── crawl.py            Single-URL ingestion
-│       ├── parallel_crawl.py   Parallel async crawling
-│       ├── grade.py            Session/wiki grading
-│       ├── heartbeat.py        Health check daemon
-│       └── config.py           Config file parser
 ├── skills/                     16 SKILL.md files (Phase 1 + Phase 2)
 ├── hooks/                      5 hook scripts
 ├── config/                     10 markdown config files (YAML frontmatter)
@@ -292,26 +278,40 @@ flowchart LR
 
 Configure in `config/harness-harness-comms.md`. Each harness gets routing rules for task delegation.
 
-## Python CLI
+## `nlr` CLI
+
+The `nlr` binary is both an MCP server (stdin/stdout JSON-RPC) and a CLI tool.
 
 ```bash
-# Status check
+# Check system health
 nlr status
 
+# Initialize the NLR directory structure
+nlr init
+
 # Ingest a URL
-nlr ingest https://example.com/article
+nlr ingest --url https://example.com/article
 
-# Parallel crawl
-nlr-parallel-crawl url1 url2 url3 --max-concurrent 10
-
-# Embed wiki into Qdrant
-nlr embed --recreate
-
-# Semantic search
+# Search wiki pages
 nlr search "market microstructure"
 
-# Grade session
-nlr grade --session --wiki
+# List pending tasks
+nlr tasks list
+
+# Create a task
+nlr tasks create --title "Ingest release notes" --type ingest --priority 1
+
+# Read a config file
+nlr config read neuro-link
+
+# Run a heartbeat health check
+nlr heartbeat
+
+# Scan for stale pages, gaps, and failures
+nlr scan
+
+# Grade the current session
+nlr grade --session
 ```
 
 ## License

@@ -5,11 +5,10 @@ secrets/*.key
 # Rust build artifacts
 server/target/
 
-# Python
-python/.venv/
-python/__pycache__/
-python/*.egg-info/
-*.pyc
+# npm
+node_modules/
+npm/native/
+npm/*.tgz
 
 # State files (runtime, not committed)
 state/session_log.jsonl
@@ -27,6 +26,3 @@ state/auto-rag-index.json
 00-raw/.hashes
 01-sorted/**/*.md
 !01-sorted/.gitkeep
-
-# Lock files
-python/uv.lock

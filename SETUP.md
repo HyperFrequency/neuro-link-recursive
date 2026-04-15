@@ -7,7 +7,7 @@ Interactive, LLM-guided setup. Run `/neuro-link-setup` for the full walkthrough,
 See **[INSTALL.md](INSTALL.md)** for complete dependency installation instructions covering Rust, Python, Docker services, MCP servers, API keys, and Obsidian setup.
 
 Quick summary of what you need:
-- **Phase 1**: Rust toolchain, Python 3.11+ (via uv), InfraNodus/Firecrawl/Context7/Auggie/TurboVault MCP servers
+- **Phase 1**: Rust toolchain, npm, InfraNodus/Firecrawl/Context7/Auggie/TurboVault MCP servers
 - **Phase 2**: Qdrant vector DB (Docker), embedding model
 - **Phase 3**: Neo4j (Docker), Ngrok, mcp2cli-rs, harness bridge config
 

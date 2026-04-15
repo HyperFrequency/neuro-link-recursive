@@ -9,14 +9,9 @@
    bash scripts/init.sh
    ```
 
-2. See [INSTALL.md](INSTALL.md) for full dependency installation (Rust, Python, Docker services, MCP servers, API keys).
+2. See [INSTALL.md](INSTALL.md) for full dependency installation (Rust, npm, Docker services, MCP servers, API keys).
 
-3. Install development dependencies:
-   ```bash
-   cd python && uv sync --extra dev && cd ..
-   ```
-
-4. Build the Rust server:
+3. Build the Rust server:
    ```bash
    cd server && cargo build && cd ..
    ```
@@ -30,9 +25,6 @@ make test
 # Rust tests only
 cd server && cargo test
 
-# Python tests only
-cd python && uv run pytest
-
 # Lint everything
 make lint
 ```
@@ -42,11 +34,6 @@ make lint
 ### Rust
 - Follow standard Rust idioms. Run `cargo clippy` before committing.
 - No warnings allowed in CI (`-D warnings`).
-
-### Python
-- Formatted and linted with [ruff](https://docs.astral.sh/ruff/). Config in `pyproject.toml`.
-- Target: Python 3.11+, line length 100.
-- Run `ruff check python/` and `ruff format --check python/` before committing.
 
 ### Shell
 - All hook scripts must pass [shellcheck](https://www.shellcheck.net/).

@@ -1,0 +1,14 @@
+*
+!bin/
+!bin/**
+!native/
+!native/**
+!README.md
+!LICENSE
+!package.json
+scripts/
+*.ts
+*.map
+.git
+.github
+node_modules

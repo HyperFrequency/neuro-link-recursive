@@ -1,0 +1,35 @@
+{
+  "name": "neuro-link-recursive",
+  "version": "0.1.0",
+  "description": "Unified API harness communication, hybrid RAG & LLM-Wiki system — context, memory & behavior control plane for AI agent harnesses",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HyperFrequency/neuro-link-recursive"
+  },
+  "bin": {
+    "nlr": "bin/nlr",
+    "neuro-link-recursive": "bin/nlr"
+  },
+  "files": [
+    "bin/",
+    "native/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "keywords": [
+    "mcp",
+    "llm-wiki",
+    "rag",
+    "knowledge-graph",
+    "ai-agents",
+    "obsidian",
+    "rust"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

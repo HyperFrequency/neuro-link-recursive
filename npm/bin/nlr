@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+
+"use strict";
+
+const { execFileSync } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+
+const BINARY_NAME = "neuro-link-mcp";
+
+function findBinary() {
+  // 1. Bundled native binary (npm package distribution)
+  const bundled = path.join(__dirname, "..", "native", "nlr");
+  if (fs.existsSync(bundled)) return bundled;
+
+  // 2. neuro-link-mcp on PATH
+  try {
+    const which = execFileSync("which", [BINARY_NAME], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (which) return which;
+  } catch {}
+
+  // 3. Cargo target directory (development)
+  const cargoRelease = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "server",
+    "target",
+    "release",
+    BINARY_NAME
+  );
+  if (fs.existsSync(cargoRelease)) return cargoRelease;
+
+  const cargoDebug = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "server",
+    "target",
+    "debug",
+    BINARY_NAME
+  );
+  if (fs.existsSync(cargoDebug)) return cargoDebug;
+
+  console.error(
+    `Error: Could not find ${BINARY_NAME} binary.\n` +
+      "Install options:\n" +
+      "  1. Run: cd server && cargo build --release\n" +
+      "  2. Run: make build\n" +
+      "  3. Ensure neuro-link-mcp is on your PATH"
+  );
+  process.exit(1);
+}
+
+const binary = findBinary();
+const args = process.argv.slice(2);
+
+try {
+  const result = execFileSync(binary, args, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  process.exit(0);
+} catch (err) {
+  if (err.status != null) {
+    process.exit(err.status);
+  }
+  console.error(`Failed to execute ${binary}: ${err.message}`);
+  process.exit(1);
+}

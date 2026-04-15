@@ -4,22 +4,12 @@ Interactive, LLM-guided setup. Run `/neuro-link-setup` for the full walkthrough,
 
 ## Prerequisites
 
-### Required (Phase 1)
-- Python 3.11+
-- Claude Code CLI with skills/hooks support
-- These MCP servers configured in `~/.claude.json`:
-  - **InfraNodus** (`mcporter`) — knowledge graphs, gap analysis
-  - **Firecrawl** (`firecrawl`) — web scraping
-  - **TurboVault** (`turbovault`) — Obsidian vault operations
-  - **Context7** (`mcp__context7__*`) — code docs
-  - **Auggie** (`mcp__auggie__*`) — semantic understanding
+See **[INSTALL.md](INSTALL.md)** for complete dependency installation instructions covering Rust, Python, Docker services, MCP servers, API keys, and Obsidian setup.
 
-### Optional (Phase 2+)
-- Qdrant vector DB (`docker run -p 6333:6333 qdrant/qdrant`)
-- Octen 8B embedding model (HuggingFace, 4096 dimensions)
-- Neo4j for Graphiti temporal knowledge graphs
-- Ngrok for API routing between harnesses
-- mcp2cli-rs binary for MCP-to-CLI conversion
+Quick summary of what you need:
+- **Phase 1**: Rust toolchain, Python 3.11+ (via uv), InfraNodus/Firecrawl/Context7/Auggie/TurboVault MCP servers
+- **Phase 2**: Qdrant vector DB (Docker), embedding model
+- **Phase 3**: Neo4j (Docker), Ngrok, mcp2cli-rs, harness bridge config
 
 ## Step 1: Initialize
 

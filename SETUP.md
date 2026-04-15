@@ -1,89 +1,63 @@
-# neuro-link-recursive Setup Guide
+# neuro-link-recursive Quick Start
 
-Interactive, LLM-guided setup. Run `/neuro-link-setup` for the full walkthrough, or follow these steps manually.
+Eight steps from zero to running. See **[INSTALL.md](INSTALL.md)** for detailed dependency installation.
 
-## Prerequisites
+## Step 1: Install
 
-See **[INSTALL.md](INSTALL.md)** for complete dependency installation instructions covering Rust, Python, Docker services, MCP servers, API keys, and Obsidian setup.
+Install all prerequisites and the `nlr` binary. See [INSTALL.md](INSTALL.md) for full instructions.
 
-Quick summary of what you need:
-- **Phase 1**: Rust toolchain, npm, InfraNodus/Firecrawl/Context7/Auggie/TurboVault MCP servers
-- **Phase 2**: Qdrant vector DB (Docker), embedding model
-- **Phase 3**: Neo4j (Docker), Ngrok, mcp2cli-rs, harness bridge config
-
-## Step 1: Initialize
+Quick path:
 
 ```bash
-cd /Users/DanBot/Desktop/HyperFrequency/neuro-link-recursive
-bash scripts/init.sh
+npm install -g neuro-link-recursive
+# or: cargo install --path server
+# or: git clone ... && cd server && cargo build --release
 ```
 
-This creates the directory tree, initializes state files, symlinks skills, and installs hooks.
+## Step 2: Initialize
 
-## Step 2: Configure Secrets
+```bash
+nlr init
+```
+
+Creates the directory tree, symlinks skills, installs hooks, initializes state files.
+
+## Step 3: Configure Secrets
 
 ```bash
 cp secrets/.env.example secrets/.env
 ```
 
-Edit `secrets/.env` with your API keys. Required keys for Phase 1:
+Edit `secrets/.env` with your API keys. Required:
 
-| Key | Where to get it | Used by |
-|-----|-----------------|---------|
-| `INFRANODUS_API_KEY` | https://infranodus.com/settings | Ontology generation, gap analysis |
-| `FIRECRAWL_API_KEY` | https://firecrawl.dev/app/api-keys | Web crawling in crawl-ingest |
-| `CONTEXT7_API_KEY` | Already in ~/.claude.json | Code doc lookups |
-| `OPENROUTER_API_KEY` | https://openrouter.ai/keys | Multi-model routing via PAL |
+| Key | Where to get it |
+|-----|-----------------|
+| `INFRANODUS_API_KEY` | https://infranodus.com/settings |
+| `FIRECRAWL_API_KEY` | https://firecrawl.dev/app/api-keys |
+| `OPENROUTER_API_KEY` | https://openrouter.ai/keys |
 
-If you already have these in `~/.claude.json` MCP server configs, you can skip this step — the skills will use the MCP server keys directly.
+See [INSTALL.md, section 6](INSTALL.md#6-api-keys) for the full key reference.
 
-## Step 3: Review Master Config
+## Step 4: Review Master Config
 
 Open `config/neuro-link.md` and review:
-- `active_skills` — which skills are enabled
-- `directories.root` — points to this directory
-- `obsidian_vault` — path to your Obsidian vault
-- `scan_interval_minutes` — how often neuro-scan checks for tasks
-- `auto_curate` — whether crawl-ingest auto-triggers wiki-curate
-- `auto_rag` — whether the auto-rag hook is active
 
-## Step 4: Configure Ingestion Sources
+- `active_skills` -- which skills are enabled
+- `directories.root` -- points to this directory
+- `obsidian_vault` -- path to your Obsidian vault
+- `scan_interval_minutes` -- how often neuro-scan checks for tasks
+- `auto_curate` -- whether crawl-ingest auto-triggers wiki-curate
+- `auto_rag` -- whether the auto-rag hook is active
 
-Edit `config/crawl-ingest-update.md` to define:
-- **Table 1**: Markdown + images to ingest directly
-- **Table 2**: URLs to crawl (single page)
-- **Table 3**: Sites to crawl entirely
-- **Table 4**: Sites to crawl + monitor for updates (with last-crawled timestamps)
+## Step 5: First Ingest + Curate
 
-## Step 5: Register Your Codebases
-
-Edit these config files:
-- `config/main-codebase-tools.md` — your repos (auto-indexes via Context7 + Auggie)
-- `config/adjacent-tools-code-docs.md` — upstream tools you use
-- `config/forked-repos-with-changes.md` — your forks (tracks upstream diff)
-
-## Step 6: Verify Installation
-
-```bash
-/neuro-link status
-```
-
-Expected output:
-- All 8 skills: active
-- All 3 hooks: registered
-- Config: loaded
-- State: initialized
-- MCP servers: connected (InfraNodus, Firecrawl, TurboVault, Context7, Auggie)
-
-## Step 7: First Ingest
-
-Try ingesting a source:
+Ingest a source:
 
 ```bash
 /crawl-ingest https://karpathy.github.io/2024/01/llm-wiki/
 ```
 
-Then curate it into a wiki page:
+Curate it into a wiki page:
 
 ```bash
 /wiki-curate llm-wiki-concepts
@@ -91,63 +65,60 @@ Then curate it into a wiki page:
 
 Check the result in `02-KB-main/` and the mutation log in `02-KB-main/log.md`.
 
-## Step 8: Set Up Auto-RAG
+## Step 6: Set Up Auto-RAG
 
-The `auto-rag-inject.sh` hook is already registered. It injects relevant wiki context into every prompt based on keyword matching against `02-KB-main/index.md`.
+The `auto-rag-inject.sh` hook is already registered by `nlr init`. It injects relevant wiki context into every prompt.
 
-To test:
+Test it:
+
 ```bash
 /auto-rag preview "How does NautilusTrader handle order routing?"
 ```
 
-This shows what context would be injected without actually injecting it.
+For semantic retrieval (instead of keyword matching), ensure Qdrant is running:
 
-## Phase 2 Setup (when ready)
-
-### Qdrant Vector DB
 ```bash
 docker run -d -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
 ```
-Update `secrets/.env` with `QDRANT_URL=http://localhost:6333`.
-The `auto-rag` skill will switch from keyword matching to semantic retrieval.
 
-### Reasoning Ontology Graphs
-Run `/reasoning-ontology <domain>` for each domain you want ontologies for.
-These are persisted to InfraNodus and can be queried by any agent.
+## Step 7: Connect Harnesses
 
-### Heartbeat Daemon
+Add the `neuro-link-recursive` MCP server to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "neuro-link-recursive": {
+      "type": "stdio",
+      "command": "nlr",
+      "args": ["mcp"],
+      "env": {"NLR_ROOT": "/path/to/neuro-link-recursive"}
+    }
+  }
+}
+```
+
+For K-Dense and ForgeCode harness connections, see [INSTALL.md, section 9](INSTALL.md#9-harness-connections).
+
+## Step 8: Enable Background Maintenance
+
+Set up the heartbeat daemon to run neuro-scan on a schedule:
+
 ```bash
 /schedule create --name "neuro-heartbeat" --cron "*/15 * * * *" --prompt "/neuro-scan"
 ```
 
-## Phase 3 Setup (when ready)
+This periodically checks for pending tasks, stale pages, knowledge gaps, and failures.
 
-### MCP Server Generation
+## Verify Everything
+
 ```bash
-# Build standalone MCP server from skills
-mcp2cli-rs bake --profile neuro-link-recursive --transport stdio
+nlr status                    # All components OK
+nlr config neuro-link        # Master config loaded
+nlr tasks                    # Task queue visible
+echo '{"jsonrpc":"2.0","method":"initialize","id":1}' | nlr mcp  # MCP responds
 ```
-
-### Ngrok API Router
-```bash
-ngrok http 8080 --domain=your-domain.ngrok-free.app
-```
-Update `config/neuro-link-config.md` with the Ngrok URL.
-
-### Harness-to-Harness Bridge
-Edit `config/harness-harness-comms.md` to add:
-- K-Dense BYOK connection (localhost or API)
-- ForgeCode CLI connection
-- Claw-Code connection
-
-Each harness gets an MCP server endpoint + API key.
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| Hook not firing | Check `~/.claude/settings.json` has the hook registered |
-| InfraNodus errors | Verify API key in `secrets/.env` or MCP config |
-| Firecrawl rate limit | Check `config/crawl-ingest-update.md` crawl interval |
-| Stale wiki pages | Run `/neuro-scan` to detect and queue updates |
-| Missing skills | Re-run `bash scripts/init.sh` to re-symlink |
+See [INSTALL.md, section 12](INSTALL.md#12-troubleshooting) for the full troubleshooting table.

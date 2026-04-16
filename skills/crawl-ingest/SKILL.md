@@ -60,7 +60,7 @@ Extract: title, content (markdown), metadata
 
 **Git Repo:**
 ```bash
-git clone --depth 1 --filter=blob:none <url> /tmp/nlr-ingest-<slug>
+git clone --depth 1 --filter=blob:none <url> /tmp/neuro-link-ingest-<slug>
 # Extract: README.md, docs/**/*.md, examples/**/*.py
 # Concatenate into a single markdown file with section headers
 ```

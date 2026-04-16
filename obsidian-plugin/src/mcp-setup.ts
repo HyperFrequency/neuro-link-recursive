@@ -27,7 +27,7 @@ export class McpSetupModal extends Modal {
     const section = contentEl.createDiv({ cls: "nlr-setup-step" });
     section.createEl("h4", { text: "Step 1: Install NLR Binary" });
 
-    const nlrBin = this.plugin.settings.nlrBinaryPath || "nlr";
+    const nlrBin = this.plugin.settings.nlrBinaryPath || "neuro-link";
     const statusEl = section.createDiv({ cls: "nlr-setup-status" });
 
     new Setting(section)
@@ -41,10 +41,10 @@ export class McpSetupModal extends Modal {
             try {
               await this.plugin.runNlrCommand(["--version"]);
               statusEl.empty();
-              statusEl.createEl("span", { text: "\u2713 NLR binary found", cls: "nlr-stats-success" });
+              statusEl.createEl("span", { text: "\u2713 neuro-link binary found", cls: "nlr-stats-success" });
             } catch {
               statusEl.empty();
-              statusEl.createEl("span", { text: "\u2717 NLR binary not found", cls: "nlr-stats-failure" });
+              statusEl.createEl("span", { text: "\u2717 neuro-link binary not found", cls: "nlr-stats-failure" });
             }
           })
       );
@@ -53,7 +53,7 @@ export class McpSetupModal extends Modal {
     installInstructions.createEl("p", { text: "Install via Cargo:" });
     const codeBlock = installInstructions.createEl("pre", { cls: "nlr-result-pre" });
     codeBlock.createEl("code", {
-      text: "cargo install neuro-link-mcp\n\n# Or build from source:\ncd server && cargo build --release\ncp target/release/neuro-link-mcp ~/.cargo/bin/nlr",
+      text: "cargo install neuro-link-mcp\n\n# Or build from source:\ncd server && cargo build --release\ncp target/release/neuro-link ~/.cargo/bin/neuro-link",
     });
   }
 
@@ -62,7 +62,7 @@ export class McpSetupModal extends Modal {
     section.createEl("h4", { text: "Step 2: Configure Claude Code MCP Server" });
 
     const nlrRoot = this.plugin.settings.nlrRoot || "/path/to/neuro-link-recursive";
-    const nlrBin = this.plugin.settings.nlrBinaryPath || "nlr";
+    const nlrBin = this.plugin.settings.nlrBinaryPath || "neuro-link";
 
     const mcpConfig = JSON.stringify(
       {
@@ -150,17 +150,60 @@ export class McpSetupModal extends Modal {
 
   private renderStep4(contentEl: HTMLElement): void {
     const section = contentEl.createDiv({ cls: "nlr-setup-step" });
-    section.createEl("h4", { text: "Step 4: API Router" });
+    section.createEl("h4", { text: "Step 4: Connect External MCP Clients" });
 
     section.createEl("p", {
-      text: "The API router exposes NLR tools over HTTP for remote harnesses.",
+      text: "The server auto-starts when the plugin loads. External MCP clients connect via HTTP.",
     });
+
+    const port = this.plugin.settings.apiRouterPort || 8080;
+
+    // Read token from secrets/.env
+    let token = "(not set)";
+    const nlrRoot = this.plugin.settings.nlrRoot;
+    if (nlrRoot) {
+      const envPath = path.join(nlrRoot, "secrets", ".env");
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, "utf-8");
+        const match = content.match(/NLR_API_TOKEN=(.+)/);
+        if (match) token = match[1].trim();
+      }
+    }
+
+    section.createEl("p", { text: `Server: http://localhost:${port}` });
+    section.createEl("p", { text: `Token: ${token.substring(0, 8)}...` });
+
+    const mcpClientConfig = JSON.stringify({
+      mcpServers: {
+        "neuro-link-recursive": {
+          type: "http",
+          url: `http://localhost:${port}/mcp`,
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      },
+    }, null, 2);
+
+    section.createEl("p", { text: "For HTTP MCP clients (add to their config):" });
+    const codeBlock = section.createEl("pre", { cls: "nlr-result-pre" });
+    codeBlock.createEl("code", { text: mcpClientConfig });
+
+    new Setting(section).addButton((btn) =>
+      btn
+        .setButtonText("Copy MCP Config")
+        .setCta()
+        .onClick(async () => {
+          await navigator.clipboard.writeText(mcpClientConfig);
+          new Notice("MCP client config copied to clipboard");
+        })
+    );
 
     new Setting(section)
       .setName("Port")
       .addText((text) =>
         text
-          .setValue(String(this.plugin.settings.apiRouterPort))
+          .setValue(String(port))
           .onChange(async (v) => {
             const p = parseInt(v, 10);
             if (!isNaN(p) && p > 0 && p < 65536) {
@@ -169,19 +212,6 @@ export class McpSetupModal extends Modal {
             }
           })
       );
-
-    const startCmd = `nlr serve --port ${this.plugin.settings.apiRouterPort}`;
-    const pre = section.createEl("pre", { cls: "nlr-result-pre" });
-    pre.createEl("code", { text: startCmd });
-
-    new Setting(section).addButton((btn) =>
-      btn
-        .setButtonText("Copy Command")
-        .onClick(async () => {
-          await navigator.clipboard.writeText(startCmd);
-          new Notice("Command copied");
-        })
-    );
   }
 
   private renderStep5(contentEl: HTMLElement): void {

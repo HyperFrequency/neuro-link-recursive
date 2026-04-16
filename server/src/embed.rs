@@ -11,9 +11,46 @@ pub struct SearchResult {
     pub preview: String,
 }
 
+fn resolve_embedding_config(root: &Path) -> (String, String, usize) {
+    // Try to read from config/neuro-link.md frontmatter
+    let config_path = root.join("config/neuro-link.md");
+    let mut model = String::new();
+    let mut dims: usize = 0;
+
+    if let Ok(content) = fs::read_to_string(&config_path) {
+        for line in content.lines() {
+            if line.starts_with("embedding_model:") {
+                model = line.split(':').nth(1).unwrap_or("").trim().to_string();
+            }
+            if line.starts_with("embedding_dims:") {
+                dims = line.split(':').nth(1).unwrap_or("0").trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    // Env var overrides
+    if let Ok(env_model) = std::env::var("EMBEDDING_MODEL") {
+        model = env_model;
+    }
+
+    // Defaults — Octen/Octen-Embedding-8B unquantized, 4096 dimensions
+    // Served locally via scripts/embedding-server.py on port 8400
+    let url = std::env::var("EMBEDDING_API_URL")
+        .unwrap_or_else(|_| "http://localhost:8400/v1/embeddings".into());
+    if model.is_empty() {
+        model = "Octen/Octen-Embedding-8B".to_string();
+    }
+    if dims == 0 {
+        dims = 4096;
+    }
+
+    (url, model, dims)
+}
+
 pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result<usize> {
     let collection = "nlr_wiki";
     let client = reqwest::Client::new();
+    let (embedding_url, embedding_model, embedding_dims) = resolve_embedding_config(root);
 
     if recreate {
         let _ = client
@@ -23,7 +60,7 @@ pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result
         client
             .put(format!("{qdrant_url}/collections/{collection}"))
             .json(&serde_json::json!({
-                "vectors": { "size": 1536, "distance": "Cosine" }
+                "vectors": { "size": embedding_dims, "distance": "Cosine" }
             }))
             .send()
             .await
@@ -32,8 +69,6 @@ pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result
 
     let kb = root.join("02-KB-main");
     let skip = ["schema.md", "index.md", "log.md"];
-    let embedding_url = std::env::var("EMBEDDING_API_URL")
-        .unwrap_or_else(|_| "http://localhost:11434/v1/embeddings".into());
     let mut count = 0;
 
     for entry in WalkDir::new(&kb).into_iter().filter_map(|e| e.ok()) {
@@ -49,7 +84,7 @@ pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result
         let embed_resp = client
             .post(&embedding_url)
             .json(&serde_json::json!({
-                "model": "text-embedding-3-small",
+                "model": embedding_model,
                 "input": &content[..content.len().min(8000)]
             }))
             .send()
@@ -96,12 +131,14 @@ pub async fn search_wiki(
 ) -> Result<Vec<SearchResult>> {
     let client = reqwest::Client::new();
     let embedding_url = std::env::var("EMBEDDING_API_URL")
-        .unwrap_or_else(|_| "http://localhost:11434/v1/embeddings".into());
+        .unwrap_or_else(|_| "http://localhost:8400/v1/embeddings".into());
+    let embedding_model = std::env::var("EMBEDDING_MODEL")
+        .unwrap_or_else(|_| "Octen/Octen-Embedding-8B".into());
 
     let embed_resp = client
         .post(&embedding_url)
         .json(&serde_json::json!({
-            "model": "text-embedding-3-small",
+            "model": embedding_model,
             "input": query
         }))
         .send()

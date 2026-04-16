@@ -25,6 +25,58 @@ pub fn resolve_nlr_root() -> Result<PathBuf> {
     anyhow::bail!("Cannot resolve NLR_ROOT. Set NLR_ROOT env var or run scripts/init.sh.")
 }
 
+/// Default folders the MCP server exposes. Users can customize via config/neuro-link.md
+/// by setting `allowed_paths` in YAML frontmatter.
+const DEFAULT_ALLOWED_PATHS: &[&str] = &[
+    "00-raw",
+    "01-sorted",
+    "02-KB-main",
+    "03-ontology-main",
+    "04-KB-agents-workflows",
+    "05-insights-gaps",
+    "05-self-improvement-HITL",
+    "06-self-improvement-recursive",
+    "06-progress-reports",
+    "07-neuro-link-task",
+    "08-code-docs",
+    "09-business-docs",
+    "config",
+];
+
+/// Read allowed_paths from config/neuro-link.md, defaulting to all KB folders.
+pub fn allowed_paths(root: &Path) -> Vec<String> {
+    let config_path = root.join("config/neuro-link.md");
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        // Parse allowed_paths from YAML frontmatter (comma-separated or YAML list)
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("allowed_paths:") {
+                let val = trimmed.strip_prefix("allowed_paths:").unwrap_or("").trim();
+                if !val.is_empty() && val != "all" {
+                    // Comma-separated: "00-raw, 02-KB-main, 07-neuro-link-task"
+                    return val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                }
+            }
+        }
+    }
+    DEFAULT_ALLOWED_PATHS.iter().map(|s| s.to_string()).collect()
+}
+
+/// Check if a relative path (from NLR_ROOT) is within an allowed directory.
+pub fn is_path_allowed(root: &Path, rel_path: &str) -> bool {
+    let allowed = allowed_paths(root);
+    // "all" or empty means everything
+    if allowed.is_empty() {
+        return true;
+    }
+    for prefix in &allowed {
+        if rel_path.starts_with(prefix.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn parse_frontmatter(path: &Path) -> Result<HashMap<String, String>> {
     let content = std::fs::read_to_string(path)?;
     let re = Regex::new(r"(?s)^---\n(.+?)\n---")?;

@@ -8,7 +8,7 @@ fn nlr_binary() -> PathBuf {
     path.push("target");
     // Use debug build for tests
     path.push("debug");
-    path.push("nlr");
+    path.push("neuro-link");
     path
 }
 
@@ -23,7 +23,7 @@ impl McpClient {
     fn spawn(nlr_root: &std::path::Path) -> Self {
         let binary = nlr_binary();
         if !binary.exists() {
-            panic!("nlr binary not found at {:?}. Run `cargo build` first.", binary);
+            panic!("neuro-link binary not found at {:?}. Run `cargo build` first.", binary);
         }
 
         let mut child = Command::new(&binary)

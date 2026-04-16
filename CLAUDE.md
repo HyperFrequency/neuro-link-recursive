@@ -1,6 +1,6 @@
 # neuro-link-recursive
 
-Unified context, memory & behavior control plane. Hybrid RAG + LLM-Wiki system with auto-curation, reasoning ontologies, and recursive self-improvement. Pure Rust binary (`nlr`).
+Unified context, memory & behavior control plane. Hybrid RAG + LLM-Wiki system with auto-curation, reasoning ontologies, and recursive self-improvement. Pure Rust binary (`neuro-link`).
 
 ## Architecture
 
@@ -23,26 +23,26 @@ Supporting layers:
 
 ## CLI
 
-The `nlr` binary is the single entry point for all operations:
+The `neuro-link` binary is the single entry point for all operations:
 
 ```bash
-nlr init              # Initialize directory tree, skills, hooks
-nlr status            # Check all components
-nlr config <name>     # Print a config file
-nlr tasks             # List task queue
-nlr mcp               # Run as MCP server (stdio)
+neuro-link init              # Initialize directory tree, skills, hooks
+neuro-link status            # Check all components
+neuro-link config <name>     # Print a config file
+neuro-link tasks             # List task queue
+neuro-link mcp               # Run as MCP server (stdio)
 ```
 
 ## MCP Server
 
-`nlr` runs as an MCP server for Claude Code. Add to `~/.claude.json`:
+`neuro-link` runs as an MCP server for Claude Code. Add to `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "neuro-link-recursive": {
       "type": "stdio",
-      "command": "nlr",
+      "command": "neuro-link",
       "args": ["mcp"],
       "env": {"NLR_ROOT": "/path/to/neuro-link-recursive"}
     }

@@ -79,6 +79,24 @@ For each repo in `upstream_check_repos`:
 2. Compare release date against last indexed date in `config/adjacent-tools-code-docs.md`
 3. If newer: create an ingest task
 
+### Step 6b — Session quality review (Claude Code)
+
+Call `nlr_sessions_scan_quality` with `days: 7`. Reports rule-based flags:
+
+- `missed_tool_call` — assistant said "I'll edit X" but no Edit followed
+- `repeated_failure` — same tool+args called 3+ times (indicates stuck loops)
+- `error_ignored` — tool returned error, next assistant turn didn't address it
+- `abandoned_tool` — tool_use with no matching tool_result
+- `loop_detected` — repeated 3-turn sequence (circular reasoning)
+- `hallucinated_file` — referenced file path that doesn't exist and wasn't touched
+
+Include in the scan report:
+- Total flags by type
+- Top 5 worst-offender sessions (link each to its markdown at `<vault>/sessions/<file>.md`)
+- Per-skill issue rate: call `nlr_sessions_skill_usage` + cross-reference with flags to find skills that correlate with issues
+
+If total_flags > 50 in a 7-day window, create a HITL proposal in `05-self-improvement-HITL/proposals/` suggesting skill prompt updates for the worst-correlated skills.
+
 ### Step 7 — Generate scan report
 
 Compile all findings into a structured report:
@@ -108,6 +126,12 @@ FAILURES
 
 UPSTREAM
   New releases detected: U repos
+
+SESSION QUALITY (Claude Code, 7d)
+  Sessions analyzed: N
+  Total flags: F
+  By type: {missed_tool_call: X, error_ignored: Y, loop_detected: Z, ...}
+  Worst offender: [[sessions/<file>.md]] (N flags)
   
 ACTIONS TAKEN
   Tasks created: T

@@ -1,58 +1,67 @@
-# neuro-link-recursive
+# neuro-link
 
-Unified API harness communication, hybrid RAG & LLM-Wiki system — context, memory & behavior control plane for AI agent harnesses.
+Unified context, memory & behavior control plane for AI agent harnesses. Hybrid RAG + LLM-Wiki system (Karpathy pattern) with auto-curation, reasoning ontologies, and recursive self-improvement.
+
+Ships a native Rust binary plus per-CLI helper packages that wire hooks + environment variables into Claude Code, Cline, ForgeCode, Claw-Code, and OpenClaw.
 
 ## Install
 
 ```bash
-npm install -g neuro-link-recursive
+npm i -g neuro-link
 ```
 
-Or run directly:
+Or run on-demand:
 
 ```bash
-npx neuro-link-recursive status
+npx neuro-link init
 ```
 
-## Quick Start
+The `postinstall` step downloads a prebuilt binary for your platform (darwin-arm64, darwin-x64, linux-x64, win32-x64). If you're running from the repo, it uses the local `server/target/release/neuro-link` build as a fallback.
 
-```bash
-# Check system status
-nlr status
-
-# Ingest a source
-nlr ingest https://example.com/article
-
-# Scan for pending tasks
-nlr scan
-
-# Curate wiki from raw sources
-nlr curate
-```
-
-## Available Commands
-
-| Command | Description |
-|---------|-------------|
-| `status` | Show system health (Rust server, Python, Qdrant, Neo4j, hooks, skills) |
-| `ingest` | Ingest a URL, repo, or file into 00-raw/ with SHA256 dedup |
-| `scan` | Scan for pending tasks, stale pages, gaps, and failures |
-| `curate` | Synthesize raw sources into wiki pages (Karpathy LLM-Wiki pattern) |
-| `embed` | Rebuild vector embeddings |
-
-## Binary Aliases
-
-Both `nlr` and `neuro-link-recursive` are available after install.
-
-## Development
-
-If installed from the git repo, the shim will find the Cargo build output automatically:
+If no binary can be fetched, build it yourself:
 
 ```bash
 cd server && cargo build --release
-npx nlr status
 ```
 
-## Documentation
+## Quick start
 
-Full docs: [github.com/HyperFrequency/neuro-link-recursive](https://github.com/HyperFrequency/neuro-link-recursive)
+```bash
+neuro-link init              # Scaffold the directory tree, install skills & hooks
+neuro-link status            # Check Rust server, Python, Qdrant, Neo4j, hooks, skills
+neuro-link tasks             # List the task queue
+neuro-link mcp               # Run as an MCP server over stdio
+```
+
+Both `neuro-link` and the short alias `nlr` are installed.
+
+## Per-CLI helpers
+
+Install the helper for your harness to register hooks and print the env vars you need:
+
+```bash
+npx @neuro-link/claude-code install
+npx @neuro-link/cline install
+npx @neuro-link/forge-code install
+npx @neuro-link/claw-code install
+npx @neuro-link/openclaw install
+```
+
+Each helper detects the host CLI's config directory, copies/symlinks the neuro-link hook scripts into it, and prints the `ANTHROPIC_BASE_URL` (and related) values to export.
+
+## Environment
+
+| Variable | Purpose |
+|---|---|
+| `NEURO_LINK_BINARY` | Absolute path override for the native binary. |
+| `NEURO_LINK_SKIP_POSTINSTALL` | Set to `1` to skip the postinstall binary resolution. |
+| `NLR_ROOT` | Root of your neuro-link-recursive workspace (used by hooks and the MCP server). |
+| `ANTHROPIC_BASE_URL` | Set by helper packages so harnesses route through the neuro-link proxy. |
+
+## Platform binaries
+
+The package ships as a thin wrapper. The real binary lives either in a platform-specific optional dependency (`@neuro-link/darwin-arm64`, etc.) or is downloaded by `scripts/postinstall.js` into `native/<platform>-<arch>/neuro-link`.
+
+## Repository
+
+https://github.com/HyperFrequency/neuro-link-recursive

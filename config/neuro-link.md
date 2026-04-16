@@ -10,7 +10,7 @@ active_skills:
   - reasoning-ontology
   - neuro-link-setup
 directories:
-  root: /Users/DanBot/Desktop/HyperFrequency/neuro-link-recursive
+  root: /Users/DanBot/Desktop/HyperFrequency/neuro-link
   raw: ./00-raw
   sorted: ./01-sorted
   kb_main: ./02-KB-main
@@ -28,11 +28,33 @@ scan_interval_minutes: 30
 default_llm: claude-sonnet-4-6
 wiki_llm: claude-sonnet-4-6
 ontology_llm: claude-opus-4-6
-embedding_model: Octen-8B-4096
-vector_db: qdrant
 obsidian_vault: /Users/DanBot/Vaults/neuro-quant-vault
 auto_curate: true
 auto_rag: true
+allowed_paths: all
+# ── Heavy Services Mode: local | cloud | hybrid ──
+# local:  run embeddings/Qdrant/Neo4j in Docker on this machine
+# cloud:  use cloud APIs (Voyage/OpenAI embeddings, Qdrant Cloud, Neo4j Aura)
+# hybrid: per-service override below
+services_mode: local
+embeddings:
+  mode: local  # local | openai | voyage | cohere
+  local_url: http://localhost:8400/v1/embeddings
+  local_model: Octen/Octen-Embedding-8B
+  local_dims: 4096
+  cloud_provider: openai
+  cloud_model: text-embedding-3-large
+  cloud_api_key_env: OPENAI_API_KEY
+vector_db:
+  mode: local  # local | qdrant_cloud | pinecone
+  local_url: http://localhost:6333
+  cloud_url: ""
+  cloud_api_key_env: QDRANT_CLOUD_API_KEY
+graph_db:
+  mode: local  # local | neo4j_aura | none
+  local_uri: bolt://localhost:7687
+  cloud_uri: ""
+  cloud_api_key_env: NEO4J_AURA_PASSWORD
 harness_bridge:
   enabled: false
   harnesses: []

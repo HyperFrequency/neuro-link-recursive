@@ -187,7 +187,7 @@ class CreateTaskModal extends Modal {
 export function registerCommands(plugin: NLRPlugin): void {
   plugin.addCommand({
     id: "nlr-check-status",
-    name: "NLR: Check Status",
+    name: "Neuro-Link: Check Status",
     callback: async () => {
       try {
         const result = await plugin.runNlrCommand(["status"]);
@@ -201,7 +201,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-run-brain-scan",
-    name: "NLR: Run Brain Scan",
+    name: "Neuro-Link: Run Brain Scan",
     callback: async () => {
       new Notice("Running brain scan...");
       try {
@@ -216,7 +216,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-ingest-current-note",
-    name: "NLR: Ingest Current Note",
+    name: "Neuro-Link: Ingest Current Note",
     callback: async () => {
       const activeFile = plugin.app.workspace.getActiveFile();
       if (!activeFile) {
@@ -240,7 +240,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-search-wiki",
-    name: "NLR: Search Wiki",
+    name: "Neuro-Link: Search Wiki",
     callback: () => {
       new SearchModal(plugin.app, plugin).open();
     },
@@ -248,7 +248,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-list-tasks",
-    name: "NLR: List Tasks",
+    name: "Neuro-Link: List Tasks",
     callback: async () => {
       try {
         const result = await plugin.runNlrCommand(["tasks"]);
@@ -262,7 +262,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-create-task",
-    name: "NLR: Create Task",
+    name: "Neuro-Link: Create Task",
     callback: () => {
       new CreateTaskModal(plugin.app, plugin).open();
     },
@@ -270,7 +270,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-run-heartbeat",
-    name: "NLR: Run Heartbeat",
+    name: "Neuro-Link: Run Heartbeat",
     callback: async () => {
       try {
         const result = await plugin.runNlrCommand(["heartbeat"]);
@@ -284,23 +284,23 @@ export function registerCommands(plugin: NLRPlugin): void {
   });
 
   plugin.addCommand({
-    id: "nlr-start-ngrok-bridge",
-    name: "NLR: Start Ngrok Bridge",
+    id: "nlr-start-server-tunnel",
+    name: "Neuro-Link: Start Server with Tunnel",
     callback: async () => {
-      new Notice("Starting Ngrok bridge...");
+      new Notice("Starting server with tunnel...");
       try {
-        const result = await plugin.runNlrCommand(["ngrok"]);
-        showResultModal(plugin.app, "Ngrok Bridge", result);
+        const result = await plugin.runNlrCommand(["serve", "--tunnel", "--token", "auto"]);
+        showResultModal(plugin.app, "Server + Tunnel", result);
       } catch (e: unknown) {
         const err = e as Error;
-        new Notice(`Ngrok bridge failed: ${err.message}`);
+        new Notice(`Server start failed: ${err.message}`);
       }
     },
   });
 
   plugin.addCommand({
     id: "nlr-rebuild-rag-index",
-    name: "NLR: Rebuild RAG Index",
+    name: "Neuro-Link: Rebuild RAG Index",
     callback: async () => {
       new Notice("Rebuilding RAG index...");
       try {
@@ -316,7 +316,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-grade-session",
-    name: "NLR: Grade Session",
+    name: "Neuro-Link: Grade Session",
     callback: async () => {
       new Notice("Grading session...");
       try {
@@ -331,7 +331,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-open-harness-setup",
-    name: "NLR: Open Harness Setup",
+    name: "Neuro-Link: Open Harness Setup",
     callback: () => {
       new HarnessSetupModal(plugin.app, plugin).open();
     },
@@ -339,7 +339,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-open-mcp-setup",
-    name: "NLR: Open MCP Setup",
+    name: "Neuro-Link: Open MCP Setup",
     callback: () => {
       new McpSetupModal(plugin.app, plugin).open();
     },
@@ -347,7 +347,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-open-api-router",
-    name: "NLR: Open API Router",
+    name: "Neuro-Link: Open API Router",
     callback: () => {
       new ApiRouterModal(plugin.app, plugin).open();
     },
@@ -355,7 +355,7 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-open-chatbot",
-    name: "NLR: Open Chatbot",
+    name: "Neuro-Link: Open Chatbot",
     callback: () => {
       plugin.activateView(VIEW_TYPE_CHATBOT);
     },
@@ -363,9 +363,39 @@ export function registerCommands(plugin: NLRPlugin): void {
 
   plugin.addCommand({
     id: "nlr-open-stats",
-    name: "NLR: Open Stats",
+    name: "Neuro-Link: Open Stats",
     callback: () => {
       plugin.activateView(VIEW_TYPE_STATS);
+    },
+  });
+
+  plugin.addCommand({
+    id: "nlr-sessions-parse",
+    name: "Neuro-Link: Parse Claude Code Sessions",
+    callback: async () => {
+      new Notice("Parsing Claude Code sessions...");
+      try {
+        const result = await plugin.runNlrCommand(["sessions", "parse"]);
+        showResultModal(plugin.app, "Session Parse", result);
+      } catch (e: unknown) {
+        const err = e as Error;
+        new Notice(`Parse failed: ${err.message}`);
+      }
+    },
+  });
+
+  plugin.addCommand({
+    id: "nlr-sessions-scan",
+    name: "Neuro-Link: Scan Session Quality",
+    callback: async () => {
+      new Notice("Scanning session quality...");
+      try {
+        const result = await plugin.runNlrCommand(["sessions", "scan", "--days", "7"]);
+        showResultModal(plugin.app, "Session Quality Scan", result);
+      } catch (e: unknown) {
+        const err = e as Error;
+        new Notice(`Scan failed: ${err.message}`);
+      }
     },
   });
 }

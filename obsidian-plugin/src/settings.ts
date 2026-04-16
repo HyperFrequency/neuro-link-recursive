@@ -42,21 +42,26 @@ export interface NLRSettings {
   apiRoutes: Array<{ keyName: string; provider: string; endpoint: string }>;
 }
 
-const API_KEY_DEFS: Array<{ key: string; label: string; desc: string }> = [
-  { key: "INFRANODUS_API_KEY", label: "InfraNodus API Key", desc: "Knowledge graph & gap analysis via mcporter" },
-  { key: "FIRECRAWL_API_KEY", label: "Firecrawl API Key", desc: "Web scraping for crawl-ingest pipeline" },
-  { key: "CONTEXT7_API_KEY", label: "Context7 API Key", desc: "Upstream code docs and API signatures" },
-  { key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", desc: "LLM routing for BYOK chatbot and harnesses" },
-  { key: "QDRANT_URL", label: "Qdrant URL", desc: "Vector database endpoint (default: http://localhost:6333)" },
-  { key: "NEO4J_URI", label: "Neo4j URI", desc: "Graph database (default: bolt://localhost:7687)" },
-  { key: "NGROK_AUTH_TOKEN", label: "Ngrok Auth Token", desc: "Tunnel for remote harness access" },
-  { key: "KDENSE_API_KEY", label: "K-Dense API Key", desc: "K-Dense BYOK research harness" },
-  { key: "MODAL_TOKEN_ID", label: "Modal Token ID", desc: "Modal cloud dispatch token" },
+const API_KEY_DEFS: Array<{ key: string; label: string; desc: string; defaultVal?: string; test: string }> = [
+  // LLM Providers (for your agents to call through neuro-link's /llm/v1 proxy)
+  { key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", desc: "LLM routing for chatbot and LLM passthrough proxy", test: "openrouter" },
+  { key: "ANTHROPIC_API_KEY", label: "Anthropic API Key", desc: "Direct Anthropic access for /llm/v1/messages passthrough (optional if using OpenRouter)", test: "key-saved" },
+  // Knowledge & Research
+  { key: "PARALLEL_API_KEY", label: "Parallel Web API Key", desc: "Web scraping, search, and deep research for crawl-ingest pipeline", test: "key-saved" },
+  { key: "INFRANODUS_API_KEY", label: "InfraNodus API Key", desc: "Knowledge graphs, gap analysis, ontology queries (MCP via mcporter)", test: "key-saved" },
+  // Local Infrastructure
+  { key: "EMBEDDING_API_URL", label: "Embedding Server URL", desc: "Octen-Embedding-8B — start with: ./scripts/embedding-server.sh", defaultVal: "http://localhost:8400/v1/embeddings", test: "local-url" },
+  { key: "QDRANT_URL", label: "Qdrant URL", desc: "Vector database for semantic search", defaultVal: "http://localhost:6333", test: "local-url" },
+  { key: "NEO4J_URI", label: "Neo4j Bolt URI", desc: "Graph database for temporal knowledge (Graphiti)", defaultVal: "bolt://localhost:7687", test: "format:bolt://" },
+  { key: "NEO4J_HTTP_URL", label: "Neo4j HTTP URL", desc: "Neo4j HTTP API for Cypher queries", defaultVal: "http://localhost:7474", test: "local-url" },
+  { key: "NEO4J_PASSWORD", label: "Neo4j Password", desc: "Neo4j auth password (user: neo4j, min 8 chars)", defaultVal: "neurolink1234", test: "key-saved" },
+  // Tunneling
+  { key: "NGROK_AUTH_TOKEN", label: "Ngrok Auth Token", desc: "Tunnel for remote MCP/API access (get from ngrok.com/dashboard)", test: "ngrok" },
 ];
 
 export const DEFAULT_SETTINGS: NLRSettings = {
   nlrRoot: "",
-  nlrBinaryPath: "nlr",
+  nlrBinaryPath: "neuro-link",
   vaultPath: "",
   apiKeys: {},
   harnesses: [],
@@ -85,6 +90,7 @@ export class NLRSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     this.renderPathsSection(containerEl);
+    this.renderFolderAccessSection(containerEl);
     this.renderApiKeysSection(containerEl);
     this.renderHarnessSection(containerEl);
     this.renderMcpSection(containerEl);
@@ -122,11 +128,11 @@ export class NLRSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("NLR Binary Path")
-      .setDesc("Path to the nlr CLI binary")
+      .setName("Neuro-Link Binary Path")
+      .setDesc("Full path to the neuro-link CLI binary (auto-resolved if left default)")
       .addText((text) =>
         text
-          .setPlaceholder("nlr")
+          .setPlaceholder("/usr/local/bin/neuro-link")
           .setValue(this.plugin.settings.nlrBinaryPath)
           .onChange(async (value) => {
             this.plugin.settings.nlrBinaryPath = value;
@@ -144,22 +150,136 @@ export class NLRSettingTab extends PluginSettingTab {
       );
   }
 
+  private renderFolderAccessSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h2", { text: "Folder Access" });
+    containerEl.createEl("p", {
+      text: "Select which folders the MCP server exposes to external clients. Default: all knowledge base folders.",
+      cls: "setting-item-description",
+    });
+
+    const nlrRoot = this.plugin.settings.nlrRoot;
+    if (!nlrRoot) {
+      new Setting(containerEl)
+        .setName("Set NLR Root first")
+        .setDesc("Configure the NLR Root path above to manage folder access");
+      return;
+    }
+
+    const ALL_FOLDERS = [
+      { name: "00-raw", desc: "Raw ingested sources" },
+      { name: "01-sorted", desc: "Classified raw material by domain" },
+      { name: "02-KB-main", desc: "Wiki pages (sources of truth)" },
+      { name: "03-ontology-main", desc: "Reasoning ontologies" },
+      { name: "04-KB-agents-workflows", desc: "Per-agent/workflow knowledge" },
+      { name: "05-insights-gaps", desc: "Knowledge gap reports" },
+      { name: "05-self-improvement-HITL", desc: "Human-in-loop improvement" },
+      { name: "06-self-improvement-recursive", desc: "Automated improvement" },
+      { name: "06-progress-reports", desc: "Daily/weekly/monthly reports" },
+      { name: "07-neuro-link-task", desc: "Task queue" },
+      { name: "08-code-docs", desc: "Code documentation" },
+      { name: "09-business-docs", desc: "Business documents" },
+      { name: "config", desc: "Configuration files" },
+    ];
+
+    // Read current allowed_paths from config
+    const configPath = path.join(nlrRoot, "config", "neuro-link.md");
+    let currentAllowed: string[] = ALL_FOLDERS.map((f) => f.name); // default: all
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, "utf-8");
+      const match = content.match(/allowed_paths:\s*(.+)/);
+      if (match && match[1].trim() !== "all") {
+        currentAllowed = match[1].split(",").map((s) => s.trim()).filter(Boolean);
+      }
+    }
+
+    for (const folder of ALL_FOLDERS) {
+      const isEnabled = currentAllowed.includes(folder.name);
+      new Setting(containerEl)
+        .setName(folder.name)
+        .setDesc(folder.desc)
+        .addToggle((toggle) =>
+          toggle.setValue(isEnabled).onChange(async (value) => {
+            if (value && !currentAllowed.includes(folder.name)) {
+              currentAllowed.push(folder.name);
+            } else if (!value) {
+              const idx = currentAllowed.indexOf(folder.name);
+              if (idx >= 0) currentAllowed.splice(idx, 1);
+            }
+          })
+        );
+    }
+
+    new Setting(containerEl)
+      .addButton((btn) =>
+        btn
+          .setButtonText("Save Folder Access")
+          .setCta()
+          .onClick(async () => {
+            await this.saveFolderAccess(currentAllowed);
+          })
+      );
+  }
+
+  private async saveFolderAccess(allowed: string[]): Promise<void> {
+    const nlrRoot = this.plugin.settings.nlrRoot;
+    if (!nlrRoot) return;
+
+    const configPath = path.join(nlrRoot, "config", "neuro-link.md");
+    if (!fs.existsSync(configPath)) {
+      new Notice("neuro-link.md not found");
+      return;
+    }
+
+    let content = fs.readFileSync(configPath, "utf-8");
+    const allowedStr = allowed.join(", ");
+
+    if (content.includes("allowed_paths:")) {
+      content = content.replace(/allowed_paths:\s*.+/, `allowed_paths: ${allowedStr}`);
+    } else {
+      // Insert before closing ---
+      content = content.replace(/\n---/, `\nallowed_paths: ${allowedStr}\n---`);
+    }
+
+    fs.writeFileSync(configPath, content, "utf-8");
+    new Notice(`Folder access updated: ${allowed.length} folders enabled`);
+  }
+
   private renderApiKeysSection(containerEl: HTMLElement): void {
-    containerEl.createEl("h2", { text: "API Keys" });
+    containerEl.createEl("h2", { text: "API Keys & Services" });
 
-    const keyInputs: Record<string, TextComponent> = {};
-
+    // Auto-populate defaults on first load
     for (const def of API_KEY_DEFS) {
+      if (def.defaultVal && !this.plugin.settings.apiKeys[def.key]) {
+        this.plugin.settings.apiKeys[def.key] = def.defaultVal;
+      }
+    }
+
+    let lastSection = "";
+    for (const def of API_KEY_DEFS) {
+      // Section headers
+      const section =
+        def.key.includes("OPENROUTER") || def.key.includes("ANTHROPIC") ? "LLM Providers" :
+        def.key.includes("INFRANODUS") || def.key.includes("PARALLEL") ? "Knowledge & Research" :
+        def.key.includes("EMBEDDING") || def.key.includes("QDRANT") || def.key.includes("NEO4J") ? "Local Infrastructure" :
+        "Tunneling";
+      if (section !== lastSection) {
+        containerEl.createEl("h3", { text: section });
+        lastSection = section;
+      }
+
+      const isPassword = !def.key.includes("URL") && !def.key.includes("URI");
       const setting = new Setting(containerEl)
         .setName(def.label)
         .setDesc(def.desc);
 
       setting.addText((text) => {
-        keyInputs[def.key] = text;
+        const placeholder = def.defaultVal || def.key;
         text
-          .setPlaceholder(def.key)
-          .setValue(this.plugin.settings.apiKeys[def.key] || "")
-          .inputEl.type = "password";
+          .setPlaceholder(placeholder)
+          .setValue(this.plugin.settings.apiKeys[def.key] || "");
+        if (isPassword) {
+          text.inputEl.type = "password";
+        }
         text.onChange(async (value) => {
           this.plugin.settings.apiKeys[def.key] = value;
           await this.plugin.saveSettings();
@@ -264,6 +384,11 @@ export class NLRSettingTab extends PluginSettingTab {
   private renderMcpSection(containerEl: HTMLElement): void {
     containerEl.createEl("h2", { text: "MCP Setup" });
 
+    // Auto-populate mcp2cli profile path
+    if (!this.plugin.settings.mcp2cliProfilePath && this.plugin.settings.nlrRoot) {
+      this.plugin.settings.mcp2cliProfilePath = path.join(this.plugin.settings.nlrRoot, "mcp2cli-profile.json");
+    }
+
     new Setting(containerEl)
       .setName("MCP Server Mode")
       .setDesc("Transport mode for MCP server")
@@ -280,10 +405,10 @@ export class NLRSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("mcp2cli-rs Profile Path")
-      .setDesc("Path to mcp2cli-rs profile JSON")
+      .setDesc("Path to mcp2cli-rs profile JSON (auto-generated by MCP Setup wizard)")
       .addText((text) =>
         text
-          .setPlaceholder("mcp2cli-profile.json")
+          .setPlaceholder(path.join(this.plugin.settings.nlrRoot || "/path/to/neuro-link", "mcp2cli-profile.json"))
           .setValue(this.plugin.settings.mcp2cliProfilePath)
           .onChange(async (value) => {
             this.plugin.settings.mcp2cliProfilePath = value;
@@ -308,7 +433,7 @@ export class NLRSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Ngrok Domain")
-      .setDesc("Custom Ngrok domain for remote access")
+      .setDesc("Custom Ngrok domain for stable remote URL (requires paid plan)")
       .addText((text) =>
         text
           .setPlaceholder("your-domain.ngrok-free.app")
@@ -318,6 +443,80 @@ export class NLRSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    // ── MCP Connection Info ──
+    containerEl.createEl("h3", { text: "Connect External Services" });
+    containerEl.createEl("p", {
+      text: "Copy the config below into your AI tool's MCP settings to connect to this neuro-link instance.",
+      cls: "setting-item-description",
+    });
+
+    const port = this.plugin.settings.apiRouterPort || 8080;
+    const nlrRoot = this.plugin.settings.nlrRoot;
+    let token = "";
+    if (nlrRoot) {
+      const envPath = path.join(nlrRoot, "secrets", ".env");
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, "utf-8");
+        const match = content.match(/NLR_API_TOKEN=(.+)/);
+        if (match) token = match[1].trim();
+      }
+    }
+
+    const binPath = this.plugin.resolveBinaryPath();
+
+    // stdio config (Claude Code, Cursor, etc.)
+    const stdioConfig = JSON.stringify({
+      mcpServers: {
+        "neuro-link": {
+          type: "stdio",
+          command: binPath,
+          args: ["mcp"],
+          env: { NLR_ROOT: nlrRoot || "/path/to/neuro-link" },
+        },
+      },
+    }, null, 2);
+
+    // HTTP config (remote clients, K-Dense, web-based tools)
+    const baseUrl = this.plugin.settings.ngrokDomain
+      ? `https://${this.plugin.settings.ngrokDomain}`
+      : `http://localhost:${port}`;
+    const httpConfig = JSON.stringify({
+      mcpServers: {
+        "neuro-link": {
+          type: "http",
+          url: `${baseUrl}/mcp`,
+          headers: { Authorization: `Bearer ${token || "YOUR_TOKEN_HERE"}` },
+        },
+      },
+    }, null, 2);
+
+    const stdioPre = containerEl.createEl("div", { cls: "nlr-setup-step" });
+    stdioPre.createEl("h4", { text: "For CLI tools (Claude Code, Cursor, Cline)" });
+    stdioPre.createEl("pre", { cls: "nlr-result-pre" }).createEl("code", { text: stdioConfig });
+    new Setting(stdioPre).addButton((btn) =>
+      btn.setButtonText("Copy stdio config").setCta().onClick(async () => {
+        await navigator.clipboard.writeText(stdioConfig);
+        new Notice("stdio MCP config copied");
+      })
+    );
+
+    const httpPre = containerEl.createEl("div", { cls: "nlr-setup-step" });
+    httpPre.createEl("h4", { text: "For web/remote tools (K-Dense, ChatGPT Actions, remote CLI)" });
+    httpPre.createEl("pre", { cls: "nlr-result-pre" }).createEl("code", { text: httpConfig });
+    new Setting(httpPre).addButton((btn) =>
+      btn.setButtonText("Copy HTTP config").setCta().onClick(async () => {
+        await navigator.clipboard.writeText(httpConfig);
+        new Notice("HTTP MCP config copied");
+      })
+    );
+
+    // REST API info
+    const restPre = containerEl.createEl("div", { cls: "nlr-setup-step" });
+    restPre.createEl("h4", { text: "REST API (OpenAPI-compatible)" });
+    restPre.createEl("pre", { cls: "nlr-result-pre" }).createEl("code", {
+      text: `Base URL: ${baseUrl}/api/v1\nAuth: Bearer ${token ? token.substring(0, 8) + "..." : "YOUR_TOKEN"}\nHealth: ${baseUrl}/health (no auth)\nDocs: ${baseUrl}/api/v1/openapi.json`,
+    });
   }
 
   private renderLoggingSection(containerEl: HTMLElement): void {
@@ -386,67 +585,133 @@ export class NLRSettingTab extends PluginSettingTab {
 
   private async testApiKey(keyName: string): Promise<void> {
     const value = this.plugin.settings.apiKeys[keyName];
+    const def = API_KEY_DEFS.find((d) => d.key === keyName);
+    const label = def?.label || keyName;
+    const test = def?.test || "key-saved";
+
     if (!value) {
-      new Notice(`${keyName} is not set`);
+      new Notice(`${label}: not set`);
       return;
     }
 
     try {
-      switch (keyName) {
-        case "QDRANT_URL":
-          await this.testHttpEndpoint(value, "Qdrant");
-          break;
-        case "NEO4J_URI":
-          new Notice(`Neo4j URI set: ${value.replace(/\/\/.*@/, "//***@")}`);
-          break;
-        case "OPENROUTER_API_KEY":
-          await this.testOpenRouter(value);
-          break;
-        case "INFRANODUS_API_KEY":
-          await this.testInfraNodus(value);
-          break;
-        default:
-          new Notice(`${keyName} saved (no live test available)`);
+      // ── key-saved: no test possible, just confirm saved ──
+      if (test === "key-saved") {
+        new Notice(`${label}: saved \u2713`);
+        return;
       }
+
+      // ── key-format:prefix — validate key starts with expected prefix ──
+      if (test.startsWith("key-format:")) {
+        const prefix = test.substring(11);
+        if (value.startsWith(prefix)) {
+          new Notice(`${label}: format valid (${prefix}...) \u2713`);
+        } else {
+          new Notice(`${label}: saved (expected prefix: ${prefix})`);
+        }
+        return;
+      }
+
+      // ── format:prefix — validate URL/URI format ──
+      if (test.startsWith("format:")) {
+        const prefix = test.substring(7);
+        new Notice(value.startsWith(prefix)
+          ? `${label}: ${value} \u2713`
+          : `${label}: expected ${prefix} prefix`);
+        return;
+      }
+
+      // ── local-url: test local service connectivity ──
+      if (test === "local-url") {
+        let url = value;
+        // Qdrant has /healthz
+        if (keyName === "QDRANT_URL") url = value.replace(/\/$/, "") + "/healthz";
+        // Embedding server: strip /v1/embeddings, try base
+        else if (keyName === "EMBEDDING_API_URL") url = value.replace(/\/v1\/embeddings\/?$/, "");
+        // Neo4j HTTP: test root
+        // else use value as-is
+
+        try {
+          const resp = await fetch(url);
+          new Notice(`${label}: connected (${resp.status}) \u2713`);
+        } catch {
+          const hint = keyName === "EMBEDDING_API_URL"
+            ? " — start with: ./scripts/embedding-server.sh"
+            : keyName === "QDRANT_URL"
+            ? " — run: docker start qdrant-nlr"
+            : keyName === "NEO4J_HTTP_URL"
+            ? " — run: docker start neo4j-nlr"
+            : "";
+          new Notice(`${label}: not reachable${hint}`);
+        }
+        return;
+      }
+
+      // ── openrouter: known working test endpoint ──
+      if (test === "openrouter") {
+        const resp = await fetch("https://openrouter.ai/api/v1/models", {
+          headers: { Authorization: `Bearer ${value}` },
+        });
+        if (resp.ok) {
+          new Notice(`${label}: connected \u2713`);
+        } else {
+          new Notice(`${label}: HTTP ${resp.status} — check your key at openrouter.ai/settings/keys`);
+        }
+        return;
+      }
+
+      // ── firecrawl: POST-only API, test with a minimal scrape ──
+      if (test === "firecrawl") {
+        const resp = await fetch("https://api.firecrawl.dev/v1/scrape", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${value}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ url: "https://example.com", formats: ["markdown"], onlyMainContent: true }),
+        });
+        if (resp.ok || resp.status === 200 || resp.status === 201) {
+          new Notice(`${label}: connected \u2713`);
+        } else if (resp.status === 401 || resp.status === 403) {
+          new Notice(`${label}: invalid key (${resp.status})`);
+        } else if (resp.status === 402) {
+          new Notice(`${label}: key valid but out of credits (${resp.status})`);
+        } else {
+          new Notice(`${label}: HTTP ${resp.status}`);
+        }
+        return;
+      }
+
+      // ── ngrok: configure auth token via CLI ──
+      if (test === "ngrok") {
+        try {
+          await execFileAsync("ngrok", ["config", "add-authtoken", value]);
+          new Notice(`${label}: configured \u2713`);
+        } catch {
+          // ngrok not on Electron PATH, try common locations
+          const ngrokPaths = ["/usr/local/bin/ngrok", "/opt/homebrew/bin/ngrok"];
+          let configured = false;
+          for (const p of ngrokPaths) {
+            if (fs.existsSync(p)) {
+              try {
+                await execFileAsync(p, ["config", "add-authtoken", value]);
+                new Notice(`${label}: configured \u2713`);
+                configured = true;
+                break;
+              } catch { /* try next */ }
+            }
+          }
+          if (!configured) {
+            new Notice(`${label}: saved — run in terminal: ngrok config add-authtoken ${value.substring(0, 8)}...`);
+          }
+        }
+        return;
+      }
+
+      new Notice(`${label}: saved \u2713`);
     } catch (e: unknown) {
       const err = e as Error;
-      new Notice(`${keyName} test failed: ${err.message}`);
-    }
-  }
-
-  private async testHttpEndpoint(url: string, name: string): Promise<void> {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        new Notice(`${name} connection OK (${response.status})`);
-      } else {
-        new Notice(`${name} responded with ${response.status}`);
-      }
-    } catch (e: unknown) {
-      const err = e as Error;
-      new Notice(`${name} unreachable: ${err.message}`);
-    }
-  }
-
-  private async testOpenRouter(key: string): Promise<void> {
-    const response = await fetch("https://openrouter.ai/api/v1/models", {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    if (response.ok) {
-      new Notice("OpenRouter connection OK");
-    } else {
-      new Notice(`OpenRouter responded with ${response.status}`);
-    }
-  }
-
-  private async testInfraNodus(key: string): Promise<void> {
-    const response = await fetch("https://infranodus.com/api/v1/status", {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    if (response.ok) {
-      new Notice("InfraNodus connection OK");
-    } else {
-      new Notice(`InfraNodus responded with ${response.status}`);
+      new Notice(`${label}: error — ${err.message}`);
     }
   }
 

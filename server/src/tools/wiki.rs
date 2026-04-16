@@ -16,6 +16,24 @@ pub fn tool_defs() -> Vec<Value> {
     ]
 }
 
+fn validate_wiki_path(kb: &Path, rel: &str) -> Result<std::path::PathBuf> {
+    if rel.contains("..") || rel.starts_with('/') || rel.contains('\0') {
+        bail!("Invalid path: traversal not allowed");
+    }
+    let full = kb.join(rel);
+    // For existing files, canonicalize and verify
+    if full.exists() {
+        let canonical = full.canonicalize()?;
+        let kb_canonical = kb.canonicalize().unwrap_or_else(|_| kb.to_path_buf());
+        if !canonical.starts_with(&kb_canonical) {
+            bail!("Access denied: path outside knowledge base");
+        }
+        return Ok(canonical);
+    }
+    // For new files, verify the parent is under kb
+    Ok(full)
+}
+
 pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
     let kb = root.join("02-KB-main");
     match name {
@@ -26,7 +44,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
             let content = args["content"].as_str().unwrap_or("");
             let confidence = args.get("confidence").and_then(|v| v.as_str()).unwrap_or("medium");
 
-            let path = kb.join(rel);
+            let path = validate_wiki_path(&kb, rel)?;
             if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
 
             let sha = hex::encode(Sha256::digest(content.as_bytes()));
@@ -43,7 +61,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
         }
         "nlr_wiki_read" => {
             let rel = args["path"].as_str().unwrap_or("");
-            let path = kb.join(rel);
+            let path = validate_wiki_path(&kb, rel)?;
             if !path.exists() { bail!("Page not found: {rel}"); }
             Ok(fs::read_to_string(&path)?)
         }
@@ -51,7 +69,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
             let rel = args["path"].as_str().unwrap_or("");
             let content = args["content"].as_str().unwrap_or("");
             let append = args.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
-            let path = kb.join(rel);
+            let path = validate_wiki_path(&kb, rel)?;
             if !path.exists() { bail!("Page not found: {rel}"); }
             if append {
                 let mut existing = fs::read_to_string(&path)?;

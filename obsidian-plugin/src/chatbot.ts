@@ -240,6 +240,9 @@ export class ChatbotView extends ItemView {
 
       if (!response.ok) {
         const errText = await response.text();
+        if (response.status === 401 || errText.includes("not found")) {
+          throw new Error(`OpenRouter auth failed (${response.status}). Check your API key at openrouter.ai/settings/keys — current key starts with: ${apiKey.substring(0, 8)}...`);
+        }
         throw new Error(`OpenRouter ${response.status}: ${errText}`);
       }
 

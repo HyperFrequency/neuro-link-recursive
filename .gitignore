@@ -15,6 +15,25 @@ state/session_log.jsonl
 state/score_history.jsonl
 state/deviation_log.jsonl
 state/auto-rag-index.json
+state/llm_logs/
+state/hooks_log.jsonl
+state/bm25_index.json
+state/supervisor.json
+state/workflows.json
+state/heartbeat.json
+
+# Test artifacts
+00-raw/test200*/
+01-sorted/*/test200*
+07-neuro-link-task/*test200*.md
+
+# LLM backend temp logs
+/tmp/nlr-*.log
+
+# Server log output
+tests/*.log
+saas/web/.next/
+saas/web/node_modules/
 
 # OS
 .DS_Store
@@ -26,3 +45,4 @@ state/auto-rag-index.json
 00-raw/.hashes
 01-sorted/**/*.md
 !01-sorted/.gitkeep
+models/

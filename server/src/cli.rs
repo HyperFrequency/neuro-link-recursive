@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "nlr", version, about = "neuro-link-recursive: unified MCP server + CLI")]
+#[command(name = "neuro-link", version, about = "neuro-link-recursive: unified MCP server + CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -69,11 +69,26 @@ pub enum Commands {
         /// Config file name (without extension)
         name: Option<String>,
     },
-    /// Start HTTP bridge wrapping MCP
-    Ngrok {
+    /// Start HTTP server (REST API + MCP over HTTP)
+    Serve {
         /// Port to listen on
         #[arg(long, default_value_t = 8080)]
         port: u16,
+        /// Bind address
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+        /// API token (use 'auto' to generate one)
+        #[arg(long)]
+        token: Option<String>,
+        /// Allow unauthenticated access (local dev only, DANGEROUS over network)
+        #[arg(long)]
+        insecure_no_auth: bool,
+        /// Start ngrok tunnel for remote access
+        #[arg(long)]
+        tunnel: bool,
+        /// Custom ngrok domain (requires ngrok paid plan)
+        #[arg(long)]
+        tunnel_domain: Option<String>,
     },
     /// Neo4j temporal graph operations
     Graph {
@@ -84,6 +99,95 @@ pub enum Commands {
     Workflow {
         #[command(subcommand)]
         action: WorkflowAction,
+    },
+    /// Recursive self-improvement worker (grade LLM logs + emit proposals)
+    Worker {
+        /// Interval between passes in minutes
+        #[arg(long, default_value_t = 15)]
+        interval: u64,
+    },
+    /// Service supervisor (monitors + restarts Qdrant/Neo4j/embedding server/ngrok)
+    Supervise,
+    /// Claude Code session tracking (parse/scan/list/export)
+    Sessions {
+        #[command(subcommand)]
+        action: SessionsAction,
+    },
+    /// All-in-one: HTTP server + supervisor + worker + embedding server
+    /// (equivalent to running serve, supervise, worker, and embedding-server.sh together)
+    Start {
+        /// Port to listen on
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Bind address
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+        /// API token (use 'auto' to generate, or omit for existing token)
+        #[arg(long)]
+        token: Option<String>,
+        /// Allow unauthenticated access
+        #[arg(long)]
+        insecure_no_auth: bool,
+        /// Start ngrok tunnel
+        #[arg(long)]
+        tunnel: bool,
+        /// Custom ngrok domain
+        #[arg(long)]
+        tunnel_domain: Option<String>,
+        /// Worker interval in minutes
+        #[arg(long, default_value_t = 15)]
+        worker_interval: u64,
+        /// Skip starting the embedding server
+        #[arg(long)]
+        no_embedding: bool,
+        /// Skip starting the worker
+        #[arg(long)]
+        no_worker: bool,
+        /// Skip starting the supervisor
+        #[arg(long)]
+        no_supervise: bool,
+        /// Skip starting the session watcher
+        #[arg(long)]
+        no_sessions_watch: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionsAction {
+    /// Parse all Claude Code sessions and export to vault markdown
+    Parse {
+        /// Only sessions ended after this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+        /// Override vault path (default: read from config/neuro-link.md)
+        #[arg(long)]
+        vault: Option<std::path::PathBuf>,
+    },
+    /// List parsed sessions
+    List {
+        /// Look back N days (default 7)
+        #[arg(long)]
+        days: Option<u64>,
+    },
+    /// Run quality scan on recent sessions
+    Scan {
+        /// Look back N days (default 7)
+        #[arg(long)]
+        days: Option<u64>,
+    },
+    /// Export API passthrough logs to vault markdown
+    ExportLlm {
+        #[arg(long)]
+        vault: Option<std::path::PathBuf>,
+    },
+    /// Watch session logs and continuously update vault markdown
+    Watch {
+        /// Override vault path
+        #[arg(long)]
+        vault: Option<std::path::PathBuf>,
+        /// Poll interval in seconds (default 30)
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
     },
 }
 

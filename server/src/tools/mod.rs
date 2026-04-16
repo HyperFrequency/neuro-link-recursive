@@ -7,6 +7,9 @@ pub mod ingest;
 pub mod tasks;
 pub mod harness;
 pub mod scan;
+pub mod llm_logs;
+pub mod hooks_log;
+pub mod sessions_tools;
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -25,6 +28,10 @@ impl ToolRegistry {
         Self { root, state }
     }
 
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     pub fn list_tools(&self) -> Vec<Value> {
         let mut tools = Vec::new();
         tools.extend(wiki::tool_defs());
@@ -34,10 +41,14 @@ impl ToolRegistry {
         tools.extend(tasks::tool_defs());
         tools.extend(harness::tool_defs());
         tools.extend(scan::tool_defs());
+        tools.extend(llm_logs::tool_defs());
+        tools.extend(hooks_log::tool_defs());
+        tools.extend(sessions_tools::tool_defs());
         // State tools
         tools.push(json!({"name": "nlr_state_heartbeat", "description": "Read or update heartbeat status", "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "update"]}}, "required": ["action"]}}));
         tools.push(json!({"name": "nlr_state_log", "description": "Append to session log", "inputSchema": {"type": "object", "properties": {"tool": {"type": "string"}, "exit_code": {"type": "integer"}}, "required": ["tool"]}}));
         tools.push(json!({"name": "nlr_config_read", "description": "Read a config file frontmatter", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Config filename without extension"}}, "required": ["name"]}}));
+        tools.push(json!({"name": "nlr_worker_status", "description": "Self-improvement worker status: last run time, proposals generated count, current metrics", "inputSchema": {"type": "object", "properties": {}}}));
         tools
     }
 
@@ -50,6 +61,9 @@ impl ToolRegistry {
             n if n.starts_with("nlr_task_") => tasks::call(n, args, &self.root),
             n if n.starts_with("nlr_harness_") => harness::call(n, args, &self.root),
             n if n.starts_with("nlr_scan_") => scan::call(n, args, &self.root, &self.state),
+            n if n.starts_with("nlr_llm_logs_") => llm_logs::call(n, args, &self.root),
+            n if n.starts_with("nlr_hooks_log_") => hooks_log::call(n, args, &self.root),
+            n if n.starts_with("nlr_sessions_") => sessions_tools::call(n, args, &self.root),
             "nlr_state_heartbeat" => {
                 let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("read");
                 match action {
@@ -69,6 +83,10 @@ impl ToolRegistry {
                 let path = self.root.join("config").join(format!("{name}.md"));
                 let fm = crate::config::parse_frontmatter(&path)?;
                 Ok(serde_json::to_string_pretty(&fm)?)
+            }
+            "nlr_worker_status" => {
+                let snap = crate::worker::global_state().snapshot();
+                Ok(serde_json::to_string_pretty(&snap)?)
             }
             _ => bail!("Unknown tool: {name}"),
         }

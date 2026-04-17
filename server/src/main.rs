@@ -15,6 +15,7 @@ mod supervisor;
 mod tools;
 mod workflow;
 mod worker;
+mod watcher_inbox;
 
 use anyhow::Result;
 use clap::Parser;
@@ -26,6 +27,15 @@ use tracing::{error, info};
 use cli::{Cli, Commands, GraphAction, SessionsAction, TaskAction, WorkflowAction};
 use protocol::{JsonRpcRequest, JsonRpcResponse};
 use tools::ToolRegistry;
+
+fn spawn_inbox_watcher(root: &std::path::Path) {
+    let root = root.to_path_buf();
+    tokio::spawn(async move {
+        if let Err(e) = watcher_inbox::run(root).await {
+            eprintln!("[watcher] inbox watcher stopped: {e}");
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -656,7 +666,7 @@ async fn run_cli(cmd: Commands) -> Result<()> {
             }
         }
 
-        Commands::Serve { port, bind, token, insecure_no_auth, tunnel, tunnel_domain } => {
+        Commands::Serve { port, bind, token, insecure_no_auth, tunnel, tunnel_domain, no_watch } => {
             if insecure_no_auth {
                 std::env::set_var("NLR_INSECURE_NO_AUTH", "1");
                 eprintln!("{} Running WITHOUT authentication (--insecure-no-auth)", "WARN".yellow().bold());
@@ -690,6 +700,9 @@ async fn run_cli(cmd: Commands) -> Result<()> {
             let registry = std::sync::Arc::new(ToolRegistry::new(root.clone()));
             let app = api::build_router(registry);
             let addr = format!("{bind}:{port}");
+            if !no_watch {
+                spawn_inbox_watcher(&root);
+            }
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             eprintln!("{} HTTP server listening on {addr}", "OK".green().bold());
             eprintln!("  POST /mcp           — MCP JSON-RPC");
@@ -931,6 +944,7 @@ async fn run_cli(cmd: Commands) -> Result<()> {
             no_worker,
             no_supervise,
             no_sessions_watch,
+            no_watch,
         } => {
             tracing_subscriber::fmt()
                 .with_env_filter(
@@ -1066,6 +1080,14 @@ async fn run_cli(cmd: Commands) -> Result<()> {
                 handles.push(tokio::spawn(async move {
                     eprintln!("[start] session watcher running ({} → {})", claude_root.display(), vault_path.display());
                     let _ = sessions::watcher::run(claude_root, vault_path, 30).await;
+                }));
+            }
+
+            if !no_watch {
+                let root_clone = root.clone();
+                handles.push(tokio::spawn(async move {
+                    eprintln!("[start] inbox watcher running");
+                    let _ = watcher_inbox::run(root_clone).await;
                 }));
             }
 

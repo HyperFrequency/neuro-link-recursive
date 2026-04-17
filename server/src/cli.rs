@@ -89,6 +89,9 @@ pub enum Commands {
         /// Custom ngrok domain (requires ngrok paid plan)
         #[arg(long)]
         tunnel_domain: Option<String>,
+        /// Disable inbox watcher
+        #[arg(long)]
+        no_watch: bool,
     },
     /// Neo4j temporal graph operations
     Graph {
@@ -149,6 +152,9 @@ pub enum Commands {
         /// Skip starting the session watcher
         #[arg(long)]
         no_sessions_watch: bool,
+        /// Skip starting the inbox watcher
+        #[arg(long)]
+        no_watch: bool,
     },
 }
 

@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-fn classify_slug_content(content: &str) -> &'static str {
+pub fn classify_slug_content(content: &str) -> &'static str {
     let lower = content.to_lowercase();
     if ["rust", "cargo", "borrow checker", "ownership", "tokio", "serde"]
         .iter()

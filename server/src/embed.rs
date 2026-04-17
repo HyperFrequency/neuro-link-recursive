@@ -47,10 +47,50 @@ fn resolve_embedding_config(root: &Path) -> (String, String, usize) {
     (url, model, dims)
 }
 
+/// Pre-flight: verify the llama-server (or configured embedding backend) is
+/// reachable before we silently no-op through a pile of pages. Returns an
+/// actionable anyhow error when the `/v1/models` probe fails, so CI / the
+/// operator sees a loud failure instead of a green "Embedded 0 pages" log.
+pub(crate) async fn preflight_embedding_backend(
+    client: &reqwest::Client,
+    embedding_url: &str,
+) -> Result<()> {
+    // Derive the `/v1/models` probe URL from the configured embeddings URL.
+    // Typical value: "http://localhost:8400/v1/embeddings" → "http://localhost:8400/v1/models".
+    let probe_url = if let Some(idx) = embedding_url.rfind("/v1/") {
+        let base = &embedding_url[..idx];
+        format!("{base}/v1/models")
+    } else {
+        // Fall back to appending /v1/models on whatever base the user configured.
+        let trimmed = embedding_url.trim_end_matches('/');
+        format!("{trimmed}/v1/models")
+    };
+
+    match client
+        .get(&probe_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) => Err(anyhow::anyhow!(
+            "embed: llama-server at {probe_url} returned HTTP {} — start it or set EMBEDDING_API_URL env var",
+            resp.status()
+        )),
+        Err(e) => Err(anyhow::anyhow!(
+            "embed: llama-server at {probe_url} unreachable ({e}) — start it or set EMBEDDING_API_URL env var"
+        )),
+    }
+}
+
 pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result<usize> {
     let collection = "nlr_wiki";
     let client = reqwest::Client::new();
     let (embedding_url, embedding_model, embedding_dims) = resolve_embedding_config(root);
+
+    // P06: fail loudly if the embedding backend is unreachable instead of
+    // silently exiting with success after embedding 0 pages.
+    preflight_embedding_backend(&client, &embedding_url).await?;
 
     if recreate {
         let _ = client

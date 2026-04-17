@@ -42,6 +42,14 @@ pub enum Commands {
         #[arg(long)]
         recreate: bool,
     },
+    /// Re-sort unclassified slugs in 00-raw/ through nlr_ingest_classify
+    Resort,
+    /// Drain the curation queue through `claude --print /wiki-curate <slug>`
+    CurateBacklog {
+        /// Maximum number of queue entries to process
+        #[arg(long, default_value_t = 1)]
+        limit: usize,
+    },
     /// Run grading pipeline
     Grade {
         /// Grade session logs

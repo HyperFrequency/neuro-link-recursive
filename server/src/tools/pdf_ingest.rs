@@ -14,28 +14,46 @@ const MIN_ILLUSTRATION_IMAGE_BYTES: u64 = 100 * 1024;
 
 fn classify_pdf_content(text: &str) -> &'static str {
     let lower = text.to_lowercase();
-    if ["theorem", "lemma", "proof", "corollary", "manifold", "topology"]
+
+    // Explicit override: meta-harness / optimizer / benchmark / LLM / agent
+    // style papers have been mislabelled as "math" because they mention
+    // theorems in passing. If any of these markers hit, route to ml-nn
+    // regardless of other keyword counts.
+    let ml_override = ["harness", "optimizer", "benchmark", "llm", "agent"];
+    if ml_override.iter().any(|kw| lower.contains(kw)) {
+        return "ml-nn";
+    }
+
+    // Otherwise: count keyword hits per domain and pick the winner.
+    // Tie (multiple domains with the same max count) or all-zero → "docs".
+    let domains: &[(&str, &[&str])] = &[
+        ("math", &["theorem", "lemma", "proof", "corollary", "manifold", "topology"]),
+        ("quant", &["portfolio", "sharpe", "backtest", "alpha", "factor", "volatility"]),
+        ("ml-nn", &["neural", "transformer", "gradient", "attention", "embedding"]),
+        ("software-engineering", &["rust", "cargo", "tokio", "serde", "async", "trait"]),
+    ];
+
+    let scored: Vec<(&'static str, usize)> = domains
         .iter()
-        .any(|kw| lower.contains(kw))
-    {
-        "math"
-    } else if ["portfolio", "sharpe", "backtest", "alpha", "factor", "volatility"]
+        .map(|(name, kws)| {
+            let hits: usize = kws.iter().map(|kw| lower.matches(kw).count()).sum();
+            (*name, hits)
+        })
+        .collect();
+
+    let max_hits = scored.iter().map(|(_, h)| *h).max().unwrap_or(0);
+    if max_hits == 0 {
+        return "docs";
+    }
+    let top: Vec<&'static str> = scored
         .iter()
-        .any(|kw| lower.contains(kw))
-    {
-        "quant"
-    } else if ["neural", "transformer", "gradient", "attention", "embedding"]
-        .iter()
-        .any(|kw| lower.contains(kw))
-    {
-        "ml-nn"
-    } else if ["rust", "cargo", "tokio", "serde", "async", "trait"]
-        .iter()
-        .any(|kw| lower.contains(kw))
-    {
-        "software-engineering"
-    } else {
+        .filter(|(_, h)| *h == max_hits)
+        .map(|(n, _)| *n)
+        .collect();
+    if top.len() != 1 {
         "docs"
+    } else {
+        top[0]
     }
 }
 
@@ -385,6 +403,38 @@ mod tests {
     #[test]
     fn classify_recognizes_math() {
         assert_eq!(classify_pdf_content("By the theorem of Stokes, ..."), "math");
+    }
+
+    #[test]
+    fn classify_meta_harness_goes_to_ml_nn_not_math() {
+        // Previously: a single "theorem" hit would flip this to math. The
+        // explicit override now catches harness/optimizer/benchmark/LLM/agent
+        // and routes to ml-nn so these meta-papers are labelled correctly.
+        let text =
+            "We propose a new harness for LLM agents. Our optimizer outperforms \
+             prior benchmarks. Theorem 1 states the convergence bound.";
+        assert_eq!(classify_pdf_content(text), "ml-nn");
+    }
+
+    #[test]
+    fn classify_picks_majority_domain() {
+        // ml-nn keywords dominate (neural, transformer, gradient, attention),
+        // with a single passing mention of "theorem". Majority wins.
+        let text = "neural transformer gradient attention embedding theorem";
+        assert_eq!(classify_pdf_content(text), "ml-nn");
+    }
+
+    #[test]
+    fn classify_ties_fall_back_to_docs() {
+        // Exactly one math hit + one quant hit → tie → docs.
+        let text = "theorem portfolio";
+        assert_eq!(classify_pdf_content(text), "docs");
+    }
+
+    #[test]
+    fn classify_all_zero_falls_back_to_docs() {
+        let text = "nothing interesting here.";
+        assert_eq!(classify_pdf_content(text), "docs");
     }
 
     #[test]

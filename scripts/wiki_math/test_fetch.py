@@ -180,3 +180,26 @@ def test_cache_roundtrip(tmp_path):
     cache_file.write_text(json.dumps(fake), encoding="utf-8")
     data = wiki.fetch_extract("Foo", cache_dir=cache)
     assert data == fake
+
+
+def test_strip_displaystyle_preserves_nested_braces():
+    # Banach-space fixture: the naive ``[^}]*`` regex stripped at the first
+    # ``}`` (inside ``_{p}``), mangling the LaTeX. The balanced-brace walker
+    # must unwrap ``{\displaystyle …}`` while keeping ``\|f\|_{p}`` intact.
+    inp = "$${\\displaystyle \\|f\\|_{p}}$$"
+    out = wiki._strip_displaystyle(inp)
+    assert "\\|f\\|_{p}" in out, f"expected inner TeX preserved, got: {out!r}"
+    assert "\\displaystyle" not in out
+    # Surrounding ``$$`` delimiters still intact.
+    assert out.startswith("$$") and out.endswith("$$")
+
+
+def test_strip_displaystyle_handles_deeply_nested():
+    inp = "before {\\displaystyle a_{i_{j}}^{k}} after"
+    out = wiki._strip_displaystyle(inp)
+    assert out == "before a_{i_{j}}^{k} after"
+
+
+def test_strip_displaystyle_passthrough_without_marker():
+    # No \displaystyle → identity.
+    assert wiki._strip_displaystyle("plain text {x}") == "plain text {x}"

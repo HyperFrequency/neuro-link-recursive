@@ -221,3 +221,43 @@ Append-only audit trail of all wiki page creates, updates, and deletions.
 ## [2026-04-17] Created: swe/python/regex-anchors.md
 - Confidence: high
 - SHA256: 8fcbabc79e4584c7ec0447d719914f88e71ee92584639ebfb0b55e87118db814
+
+## [2026-04-17] Created: quant/risk-reversal-collar.md
+- Confidence: high
+- SHA256: b233acb48f772c0bfda583d85e9e04367ff407ef5e162ec3d7e629c99262075b
+
+## [2026-04-17] Created: quant/iron-condor-butterfly.md
+- Confidence: high
+- SHA256: 77772f6b1fa2404550b6d1e25c45cb16fb6cc62f88e3c5dab721c4a259cb37ff
+
+## [2026-04-17] Created: quant/calendar-spreads-time-decay.md
+- Confidence: high
+- SHA256: bb95a5508d564dc644423b409908a304847cdad3e91bd41c7866cd3ea0334d5e
+
+## [2026-04-17] Created: quant/dividend-arbitrage.md
+- Confidence: high
+- SHA256: c5222492f931a9c8ea1099f9031019810d9e727dafd4be1154055b7c67cdbc71
+
+## [2026-04-17] Created: quant/merger-arbitrage.md
+- Confidence: high
+- SHA256: ad7f192146acf7a923b76f066bbcedd9cdc75dffcc01bf5dee36dd2c0acb5179
+
+## [2026-04-17] Created: quant/convertible-arbitrage.md
+- Confidence: high
+- SHA256: f761f98a42fa182c147dd8f9a07fc55e17bddd4269ed72eceff7d42dfab4e0a0
+
+## [2026-04-17] Created: quant/fixed-income-arbitrage.md
+- Confidence: high
+- SHA256: 3e31e938a2025548ed24cd4d02e2a2b80cc0e361f82c7a48dffd9f3a1ad228cc
+
+## [2026-04-17] Created: quant/yield-curve-nelson-siegel-svensson.md
+- Confidence: high
+- SHA256: 17d84ccb3c551427d1c1c0a398d5ad1f70fefd9b570b81c9d240bc6bbd262b68
+
+## [2026-04-17] Created: quant/pca-on-rates.md
+- Confidence: high
+- SHA256: d25f21350411a6f3509daa1da6937d517f5a264ca4b790c80f3eb8321bc77239
+
+## [2026-04-17] Created: quant/duration-convexity-hedging.md
+- Confidence: high
+- SHA256: d5a77ac77afb82788edcacd49236a1f4810a88ad99fb50973f3db59c9f671495

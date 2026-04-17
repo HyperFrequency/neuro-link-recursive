@@ -1,492 +1,329 @@
-# Installation Guide
+# neuro-link-recursive — Install Guide
 
-Complete step-by-step guide to get neuro-link-recursive running from scratch. The entire system is a pure Rust binary (`nlr`). Assumes macOS (Homebrew available). Adjust package manager commands for Linux.
-
----
-
-## Table of Contents
-
-1. [Prerequisites](#1-prerequisites)
-2. [Install nlr](#2-install-nlr)
-3. [Infrastructure Setup](#3-infrastructure-setup)
-4. [MCP Server Setup](#4-mcp-server-setup)
-5. [mcp2cli-rs Setup](#5-mcp2cli-rs-setup)
-6. [API Keys](#6-api-keys)
-7. [Secrets and Environment Variables](#7-secrets-and-environment-variables)
-8. [Obsidian Vault Setup](#8-obsidian-vault-setup)
-9. [Harness Connections](#9-harness-connections)
-10. [Skills and Hooks Installation](#10-skills-and-hooks-installation)
-11. [Verification Checklist](#11-verification-checklist)
-12. [Troubleshooting](#12-troubleshooting)
+LLM-friendly, numbered steps. Three install paths (pick one). Each step lists the
+command, expected output, and what to do if it fails.
 
 ---
 
-## 1. Prerequisites
+## What you're installing
 
-### Rust toolchain
+`neuro-link-recursive` is a unified context, memory & behavior control plane for
+AI agent harnesses (Claude Code, Cline, K-Dense, ForgeCode...). The runtime is
+a single Rust binary (`neuro-link`, v0.2.0) plus several backing services.
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
+**Components installed:**
 
-# Verify
-rustc --version   # 1.75+
-cargo --version
-```
+| Component | Purpose | Default port |
+|-----------|---------|--------------|
+| `neuro-link` (Rust) | HTTP API, MCP server (stdio + HTTP), CLI | `8080` |
+| Qdrant (Docker) | Vector store for the dense half of hybrid RAG | `6333` |
+| Neo4j (Docker) | Temporal knowledge graph (Graphiti) | `7474`, `7687` |
+| Obsidian headless (Docker) | Web-accessible vault UI for the runtime KB | `8501` |
+| Ollama | Local LLM + lightweight embeddings | `11434` |
+| llama-server (llama.cpp) | Octen-Embedding-8B (4096-dim primary embedder) | `8400` |
+| ngrok | Public tunnel for harness-to-harness MCP-over-HTTP | dynamic |
+| Obsidian plugin | UI inside any Obsidian vault | n/a |
+| Claude Code MCP | 34 MCP tools, 5 hooks, 16 skills wired in | n/a |
 
-### Node.js 18+ (for npx install method)
+**Hybrid RAG flow:** retrieval combines BM25 (lexical) and Qdrant
+(dense vector) results via Reciprocal Rank Fusion (RRF). Successful queries
+return `"source": "hybrid-rrf"`.
 
-```bash
-brew install node
+### Runtime root vs dev source
 
-# Verify
-node --version    # 18+
-npm --version
-```
+This repo has two roles depending on where you cloned it:
 
-### Docker (for Qdrant and Neo4j)
+- **Runtime root** — `~/neuro-link/` — what the live `neuro-link serve`
+  process reads. Data lives here (`02-KB-main/`, `03-ontology-main/`, etc.).
+- **Dev source** — `~/Desktop/HyperFrequency/neuro-link/` — the git checkout
+  you build from. Data folders here are **symlinks** back to the runtime root.
 
-```bash
-brew install --cask docker
-
-# Verify
-docker --version
-```
-
-### Git
-
-```bash
-# macOS ships with git; verify it's available
-git --version
-```
+If you're a first-time user with no existing runtime, the install scripts
+treat your clone as both — `NLR_ROOT` defaults to the directory containing
+`install.sh`.
 
 ---
 
-## 2. Install nlr
+## Path A — `npm install -g neuro-link` (recommended)
 
-Three options. Pick one.
+Best for: you already have Node 18+ and just want the binary + setup wizard.
 
-### Option A: npm (recommended)
-
-```bash
-npm install -g neuro-link-recursive
-```
-
-Or run without installing globally:
+### A.1 — Install the npm package
 
 ```bash
-npx neuro-link-recursive init
+npm install -g neuro-link
 ```
 
-### Option B: cargo
+**Expected output:** `added 1 package` plus a `[neuro-link postinstall]` line
+saying it placed a binary in `native/<platform>-<arch>/`.
+
+**If it fails:**
+- "unsupported platform": you're not on darwin-arm64, darwin-x64, linux-x64,
+  or win32-x64. Use Path C (manual build) instead.
+- "no binary installed": prebuilt binary couldn't be downloaded. Either
+  rebuild (`npm rebuild neuro-link`) or use Path C.
+
+### A.2 — Verify the binary
 
 ```bash
-cargo install --path server
+neuro-link --version
 ```
 
-The binary installs to `~/.cargo/bin/nlr`.
+**Expected:** `neuro-link 0.2.0`.
 
-### Option C: From source
+**If it fails:** the npm bin shim couldn't resolve the binary. Set
+`NEURO_LINK_BINARY=/path/to/neuro-link` or rebuild via Path C.
+
+### A.3 — Run the dependency setup
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HyperFrequency/neuro-link-recursive/master/setup-deps.sh -o /tmp/setup-deps.sh
+NLR_ROOT="$HOME/neuro-link" bash /tmp/setup-deps.sh
+```
+
+**Expected:** six numbered `=== N/6 ... ===` sections, ending with `Status` and
+green `[OK]` lines for Qdrant, Neo4j, Ollama, llama-server.
+
+**If it fails on Docker:** open Docker Desktop manually, wait for the whale icon
+to be steady, re-run the script.
+**If ollama pulls hang:** check disk space (the qwen3 model is ~15 GB).
+
+### A.4 — Configure secrets
+
+```bash
+cd "$HOME/neuro-link"
+cp secrets/.env.example secrets/.env
+$EDITOR secrets/.env
+```
+
+Fill in (at minimum): `INFRANODUS_API_KEY`, `FIRECRAWL_API_KEY`,
+`OPENROUTER_API_KEY`, `NGROK_AUTH_TOKEN`, `NEO4J_PASSWORD`. The `NLR_API_TOKEN`
+is auto-generated on first `neuro-link serve` if blank.
+
+### A.5 — Start the server
+
+```bash
+neuro-link serve --port 8080 --token "$(grep NLR_API_TOKEN secrets/.env | cut -d= -f2)" &
+```
+
+**Expected:** logs ending in `listening on 0.0.0.0:8080`.
+
+### A.6 — Verify everything
+
+Skip to **[Verify install](#verify-install)** below.
+
+---
+
+## Path B — `curl ... | bash` (one-shot, no Node required)
+
+Best for: fresh machine, you want every dependency installed in one go.
+
+### B.1 — Run the installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HyperFrequency/neuro-link-recursive/master/install.sh | bash
+```
+
+**What this does:**
+1. Clones the repo into `~/neuro-link-recursive` (override with `NLR_INSTALL_DIR=...`).
+2. Installs Homebrew, git, Rust, Node 20, Docker, ngrok, ollama, llama.cpp.
+3. `cargo build --release` for the `neuro-link` Rust binary.
+4. Builds the Obsidian plugin.
+5. Runs `setup-deps.sh` (containers, models, Claude wiring, MCP).
+6. Symlinks `neuro-link` to `~/.cargo/bin/`.
+7. Detects Obsidian vaults and offers to install the plugin.
+8. Runs the runtime smoke test.
+
+**Expected output:** `=== 1/9 ===` through `=== 9/9 ===` sections, then a
+`Summary` block with green `+` items and ideally `All checks passed.` from
+the smoke test.
+
+**If it fails partway:** the script is idempotent — fix the underlying issue
+and re-run. It checks before installing anything.
+
+### B.2 — Configure secrets
+
+Same as **A.4** but `cd ~/neuro-link-recursive`.
+
+### B.3 — Verify
+
+Skip to **[Verify install](#verify-install)**.
+
+---
+
+## Path C — Manual (`git clone && make install`)
+
+Best for: development, custom builds, restricted networks.
+
+### C.1 — Clone the repo
 
 ```bash
 git clone https://github.com/HyperFrequency/neuro-link-recursive.git
-cd neuro-link-recursive/server
-cargo build --release
+cd neuro-link-recursive
 ```
 
-The binary is at `server/target/release/nlr`. Add it to your PATH or symlink it:
+### C.2 — Install Rust + Node + Docker manually
 
 ```bash
-ln -s "$(pwd)/target/release/nlr" ~/.cargo/bin/nlr
+# Rust 1.75+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustc --version    # expect 1.75+
+
+# Node 20+
+brew install node@20
+node --version     # expect v20+
+
+# Docker Desktop
+brew install --cask docker
+open -a Docker     # one-time, grant permissions
 ```
+
+### C.3 — Build the binary + plugin
+
+```bash
+make build          # cargo build --release in server/
+cd obsidian-plugin && npm ci && npm run build && cd ..
+```
+
+**Expected:** `server/target/release/neuro-link` exists; `obsidian-plugin/main.js` exists.
+
+### C.4 — Run dependency setup
+
+```bash
+bash setup-deps.sh
+```
+
+(Same six steps as Path A.3.)
+
+### C.5 — Init Claude wiring
+
+```bash
+make install        # runs scripts/init.sh
+```
+
+**What this does:** creates the directory tree, symlinks 16 skills into
+`~/.claude/skills/`, copies 5 hooks into `~/.claude/hooks/`, registers them in
+`~/.claude/settings.json`, persists `NLR_ROOT` to `~/.claude/state/nlr_root`.
+
+### C.6 — Symlink the binary
+
+```bash
+ln -sf "$(pwd)/server/target/release/neuro-link" ~/.cargo/bin/neuro-link
+neuro-link --version
+```
+
+### C.7 — Configure secrets and start
+
+Same as A.4 + A.5.
+
+### C.8 — Verify
+
+Continue to **[Verify install](#verify-install)**.
 
 ---
 
-## 3. Infrastructure Setup
+## Verify install
 
-### Qdrant (vector DB for semantic search / Auto-RAG)
+Both `setup-deps.sh` and `install.sh` end with a status check, but the
+authoritative test is `test-runtime.sh` (under
+`.claude/worktrees/compassionate-franklin-2583d0/`).
 
-```bash
-docker run -d -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
-```
-
-Verify: `curl -s http://localhost:6333/healthz`
-
-Dashboard: http://localhost:6333/dashboard
-
-Restart after reboot: `docker start $(docker ps -aqf "ancestor=qdrant/qdrant")`
-
-### Neo4j (graph DB for Graphiti temporal knowledge graphs)
+### Run the smoke test
 
 ```bash
-docker run -d -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:5
+NLR_API_TOKEN=$(grep NLR_API_TOKEN ~/neuro-link/secrets/.env | cut -d= -f2) \
+  bash ~/neuro-link/.claude/worktrees/compassionate-franklin-2583d0/test-runtime.sh
 ```
 
-Replace `password` with a real password and record it for `secrets/.env`.
+**Expected output:** 13 numbered checks, all `PASS`, ending with
+`All checks passed.`
 
-Verify: `curl -s http://localhost:7474`
+The 13 checks cover:
 
-Browser: http://localhost:7474
+| # | Check | Why |
+|---|-------|-----|
+| 1 | local `/health` | Rust server bound to :8080 |
+| 2 | public `/health` via ngrok | tunnel up |
+| 3 | local `/api/v1/wiki/pages` | bearer auth + KB readable |
+| 4 | local `/api/v1/rag/query` | hybrid RRF returns `source=hybrid-rrf` |
+| 5 | public `/api/v1/rag/query` | RAG works through tunnel |
+| 6 | MCP stdio `tools/list` | binary exposes ≥30 MCP tools (actual: 34) |
+| 7 | MCP-over-HTTP `tools/list` | streamable HTTP MCP works |
+| 8 | MCP-over-HTTP `nlr_rag_query` | tool call returns hybrid-rrf result |
+| 9 | Qdrant `nlr_wiki` collection | vector index populated |
+| 10 | Neo4j `:7474` | graph DB up |
+| 11 | Ollama `/api/tags` | embedding daemon reachable |
+| 12 | llama-server `:8400` | Octen embedding endpoint up |
+| 13 | unauthenticated request returns 401 | bearer auth enforced |
 
-### Ngrok (tunnel URLs for harness-to-harness communication)
+### Per-component manual checks
 
 ```bash
-# Via Homebrew
-brew install ngrok
-
-# Or via npm
-npm install -g ngrok
+neuro-link --version                                              # 0.2.0
+curl -sf http://localhost:6333/healthz && echo OK                 # Qdrant
+curl -sf http://localhost:7474 > /dev/null && echo OK             # Neo4j
+curl -sf http://localhost:11434/api/tags | jq '.models | length'  # Ollama models
+curl -sf http://localhost:8400/v1/models > /dev/null && echo OK   # llama-server
+ngrok version                                                     # tunnel
+ls ~/.claude/skills/neuro-link/SKILL.md                           # skills
+grep -c neuro ~/.claude/settings.json                             # hooks registered
+claude mcp list | grep neuro-link-recursive                       # MCP registered
 ```
 
-Authenticate:
+### Inspect what's wired in
 
-```bash
-ngrok config add-authtoken YOUR_NGROK_AUTH_TOKEN
-# Get token from https://dashboard.ngrok.com/get-started/your-authtoken
-```
+The runtime exposes:
 
-Verify: `ngrok version`
+- **34 MCP tools** — knowledge-base CRUD, RAG queries, ingestion, ontology
+  generation, harness bridge, task queue. List with:
+  `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | neuro-link mcp | jq '.result.tools | length'`
+- **5 hooks** — `auto-rag-inject.sh` (UserPromptSubmit RAG injection),
+  `harness-bridge-check.sh` (peer health), `neuro-grade.sh` (response scoring),
+  `neuro-log-tool-use.sh` (tool telemetry), `neuro-task-check.sh` (task queue).
+- **16 skills** — `auto-rag`, `code-docs`, `crawl-ingest`, `harness-bridge`,
+  `hyper-sleep`, `job-scanner`, `knowledge-gap`, `neuro-link`,
+  `neuro-link-setup`, `neuro-scan`, `neuro-surgery`, `progress-report`,
+  `reasoning-ontology`, `self-improve-hitl`, `self-improve-recursive`,
+  `wiki-curate`.
 
 ---
 
-## 4. MCP Server Setup
+## Troubleshooting
 
-### neuro-link-recursive MCP for Claude Code
-
-Add this to `~/.claude.json` under `mcpServers`:
-
-```json
-{
-  "mcpServers": {
-    "neuro-link-recursive": {
-      "type": "stdio",
-      "command": "nlr",
-      "args": ["mcp"],
-      "env": {
-        "NLR_ROOT": "/path/to/neuro-link-recursive"
-      }
-    }
-  }
-}
-```
-
-Replace `/path/to/neuro-link-recursive` with the absolute path to your clone.
-
-### InfraNodus MCP
-
-```json
-{
-  "mcpServers": {
-    "mcporter": {
-      "command": "npx",
-      "args": ["-y", "@infranodus/mcp-server"],
-      "env": {
-        "INFRANODUS_API_KEY": "your-key-here"
-      }
-    }
-  }
-}
-```
-
-### Firecrawl MCP
-
-```json
-{
-  "mcpServers": {
-    "firecrawl": {
-      "command": "npx",
-      "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_KEY": "your-key-here"
-      }
-    }
-  }
-}
-```
-
-### Context7 MCP
-
-```json
-{
-  "mcpServers": {
-    "context7": {
-      "command": "npx",
-      "args": ["-y", "@context7/mcp-server"]
-    }
-  }
-}
-```
-
-No API key required for the default tier.
-
-### Auggie MCP (Augment Code)
-
-```json
-{
-  "mcpServers": {
-    "auggie": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/augment-mcp-server"]
-    }
-  }
-}
-```
-
-Follow any auth steps shown in Claude Code on first invocation.
-
-### TurboVault MCP (Obsidian vault operations)
-
-```json
-{
-  "mcpServers": {
-    "turbovault": {
-      "command": "npx",
-      "args": ["-y", "@turbovault/mcp-server"],
-      "env": {
-        "OBSIDIAN_VAULT_PATH": "/path/to/your/obsidian/vault"
-      }
-    }
-  }
-}
-```
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `cargo build` fails | Rust < 1.75 | `rustup update stable` |
+| `neuro-link: command not found` | binary not on PATH | `export PATH="$HOME/.cargo/bin:$PATH"` |
+| `[neuro-link postinstall] no binary installed` | unsupported platform | use Path C; build from source |
+| Qdrant 6333 refused | container not running | `docker compose up -d qdrant` |
+| Neo4j 7474 refused | container not running | `docker compose up -d neo4j` |
+| obsidian-headless 8501 blank | container starting | `docker compose logs obsidian-headless`; wait ~30s |
+| Ollama `/api/tags` empty | model pulls didn't run | `ollama pull qwen3-embedding:8b-fp16` |
+| llama-server :8400 refused | embedding server not running | `bash scripts/embedding-server.sh` |
+| ngrok tunnel down | auth token missing | `ngrok config add-authtoken $NGROK_AUTH_TOKEN` |
+| MCP tools/list shows < 30 | wrong binary on PATH | `which neuro-link`; rebuild |
+| Smoke test step 4 fails (`hybrid-rrf` missing) | Qdrant collection empty | run an `/wiki-curate` to populate, or seed via API |
+| Smoke test step 13 returns 200 not 401 | bearer auth disabled | check `--token` flag passed to `neuro-link serve` |
+| Hooks don't fire | not registered in settings.json | re-run `bash scripts/init.sh` |
+| Obsidian plugin not visible | not copied to vault | `cp -r obsidian-plugin/* /path/to/vault/.obsidian/plugins/neuro-link-recursive/` |
+| Claude MCP not connecting | not registered | `claude mcp add neuro-link-recursive -- neuro-link mcp` |
+| `secrets/.env` keys missing | not filled | see "Configure secrets" above |
 
 ---
 
-## 5. mcp2cli-rs Setup
-
-`mcp2cli-rs` converts MCP servers into standalone CLIs for the harness bridge.
-
-```bash
-cargo install mcp2cli-rs
-mcp2cli-rs --profile mcp2cli-profile.json
-```
-
-If the crate is not yet published, build from source:
-
-```bash
-git clone https://github.com/HyperFrequency/mcp2cli-rs.git
-cd mcp2cli-rs
-cargo install --path .
-```
-
-Verify: `mcp2cli-rs --help`
-
----
-
-## 6. API Keys
-
-### InfraNodus
-
-- **What it's for**: Reasoning ontologies, knowledge graphs, content gap analysis
-- **Where to get it**: https://infranodus.com/settings -- sign in, go to Settings > API Keys, generate a new key
-- **How to set it**: Add `INFRANODUS_API_KEY=ink_...` to `secrets/.env`
-- **How to verify**: `nlr status` should show InfraNodus as connected; or invoke the `mcporter` MCP server in Claude Code
-
-### Firecrawl
-
-- **What it's for**: Web scraping for the crawl-ingest pipeline
-- **Where to get it**: https://firecrawl.dev/app/api-keys -- sign in, generate a new key
-- **How to set it**: Add `FIRECRAWL_API_KEY=fc-...` to `secrets/.env`
-- **How to verify**: `nlr status` should show Firecrawl as connected; or invoke the `firecrawl` MCP server
-
-### OpenRouter
-
-- **What it's for**: Multi-model routing via PAL (for embedding models and LLM fallbacks)
-- **Where to get it**: https://openrouter.ai/keys -- sign in, create a new key
-- **How to set it**: Add `OPENROUTER_API_KEY=sk-or-...` to `secrets/.env`
-- **How to verify**: `nlr status` should show OpenRouter as connected
-
-### Ngrok
-
-- **What it's for**: Tunnel URLs for harness-to-harness communication
-- **Where to get it**: https://dashboard.ngrok.com/get-started/your-authtoken
-- **How to set it**: Add `NGROK_AUTH_TOKEN=...` to `secrets/.env`; also run `ngrok config add-authtoken YOUR_TOKEN`
-- **How to verify**: `ngrok version` and `nlr status`
-
-### K-Dense BYOK (optional)
-
-- **What it's for**: K-Dense harness API access
-- **Where to get it**: Your K-Dense account dashboard
-- **How to set it**: Add `KDENSE_API_KEY=...` to `secrets/.env`
-- **How to verify**: `nlr status` should show K-Dense as connected (if configured)
-
-### Neo4j
-
-- **What it's for**: Graphiti temporal knowledge graphs
-- **Where to get it**: You set the password when starting the container (step 3)
-- **How to set it**: Add `NEO4J_PASSWORD=...` to `secrets/.env`
-- **How to verify**: `curl -s http://localhost:7474` returns JSON; `nlr status` shows Neo4j connected
-
----
-
-## 7. Secrets and Environment Variables
-
-All secrets live in `secrets/.env` (gitignored).
-
-```bash
-cp secrets/.env.example secrets/.env
-# Edit with your keys
-```
-
-Full reference:
-
-```bash
-# --- Required ---
-INFRANODUS_API_KEY=ink_...          # Ontology generation, gap analysis
-FIRECRAWL_API_KEY=fc-...            # Web crawling in crawl-ingest
-OPENROUTER_API_KEY=sk-or-...        # Multi-model routing via PAL
-
-# --- Infrastructure ---
-QDRANT_URL=http://localhost:6333    # Vector DB
-QDRANT_API_KEY=                     # Leave blank for local Qdrant
-NEO4J_URI=bolt://localhost:7687     # Graph DB
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=...                  # Password from docker run
-
-# --- Embeddings ---
-EMBEDDING_MODEL=Octen-8B            # Default embedding model
-EMBEDDING_DIM=4096                  # Embedding dimensions
-
-# --- Harness bridge ---
-NGROK_AUTH_TOKEN=...                # Tunnel URLs
-KDENSE_API_KEY=                     # K-Dense BYOK (optional)
-KDENSE_URL=http://localhost:3000
-MODAL_TOKEN_ID=                     # Modal.com cloud compute (optional)
-MODAL_TOKEN_SECRET=
-```
-
-The `nlr` binary reads these from the environment or from `secrets/.env` at startup.
-
----
-
-## 8. Obsidian Vault Setup
-
-neuro-link-recursive syncs wiki pages and ontologies to an Obsidian vault for visual navigation.
-
-1. Install [Obsidian](https://obsidian.md) if you don't have it.
-2. Create or designate a vault directory (e.g., `~/Documents/Auto-Quant`).
-3. Point the config to your vault -- update `config/neuro-link.md` frontmatter:
-   ```yaml
-   obsidian_vault: /path/to/your/obsidian/vault
-   ```
-4. Ensure the vault path matches `OBSIDIAN_VAULT_PATH` in TurboVault's MCP config (step 4).
-5. Install the **neuro-link-recursive Obsidian plugin** from the community plugins browser or manually copy it into `.obsidian/plugins/neuro-link-recursive/`.
-6. Connect TurboVault MCP (configured in step 4) so Claude Code can read/write vault contents.
-
-Recommended Obsidian community plugins:
-- **Dataview** -- query YAML frontmatter across pages
-- **Graph Analysis** -- enhanced graph view
-- **Templater** -- consistent page scaffolding
-
----
-
-## 9. Harness Connections
-
-### Claude Code (primary, always active)
-
-- **Install**: Already installed if you're reading this in Claude Code
-- **Configure**: Add the `neuro-link-recursive` MCP server to `~/.claude.json` (step 4)
-- **Verify**: Run `nlr status` from within Claude Code; the MCP server should show as connected
-
-### K-Dense BYOK (localhost)
-
-- **Install**: Follow K-Dense setup instructions for your platform
-- **Configure**: Set `KDENSE_API_KEY` and `KDENSE_URL=http://localhost:3000` in `secrets/.env`; add a harness entry in `config/harness-harness-comms.md`
-- **Verify**: `curl -s http://localhost:3000/health` should return OK; `nlr status` should show K-Dense connected
-
-### ForgeCode (CLI)
-
-- **Install**: `npm install -g forgecode-cli` or download from ForgeCode website
-- **Configure**: Add ForgeCode API key to `secrets/.env`; register the harness endpoint in `config/harness-harness-comms.md`
-- **Verify**: `forgecode --version`; `nlr status` should list ForgeCode as a connected harness
-
-Each harness gets an MCP server endpoint and API key. Edit `config/harness-harness-comms.md` to manage connections.
-
----
-
-## 10. Skills and Hooks Installation
-
-```bash
-nlr init
-```
-
-Or equivalently:
-
-```bash
-bash scripts/init.sh
-```
-
-This will:
-- Create the full directory tree
-- Symlink skill definitions into `~/.claude/skills/`
-- Copy hook scripts into `~/.claude/hooks/`
-- Register hooks in `~/.claude/settings.json`
-- Initialize state files
-
-Safe to re-run after updates (idempotent).
-
-Manual verification:
-
-```bash
-ls -la ~/.claude/skills/neuro-link/SKILL.md
-ls -la ~/.claude/hooks/auto-rag-inject.sh
-grep -c "neuro" ~/.claude/settings.json
-```
-
----
-
-## 11. Verification Checklist
-
-Run each of these after installation:
-
-```bash
-nlr status                    # Should show OK for all components
-nlr config neuro-link        # Should print the master config
-nlr tasks                    # Should show empty queue (or pending tasks)
-echo '{"jsonrpc":"2.0","method":"initialize","id":1}' | nlr mcp  # Should return a JSON-RPC response
-```
-
-### Component-by-component checks
-
-```bash
-# nlr binary
-nlr --version && echo "OK: nlr"
-
-# Qdrant
-curl -sf http://localhost:6333/healthz && echo "OK: Qdrant"
-
-# Neo4j
-curl -sf http://localhost:7474 > /dev/null && echo "OK: Neo4j"
-
-# Ngrok
-ngrok version > /dev/null 2>&1 && echo "OK: Ngrok"
-
-# mcp2cli-rs
-mcp2cli-rs --help > /dev/null 2>&1 && echo "OK: mcp2cli-rs"
-
-# Hooks registered
-grep -q "auto-rag-inject" ~/.claude/settings.json && echo "OK: Hooks"
-
-# Skills installed
-ls ~/.claude/skills/neuro-link/SKILL.md > /dev/null 2>&1 && echo "OK: Skills"
-
-# Secrets file exists
-[ -f secrets/.env ] && echo "OK: secrets/.env"
-```
-
----
-
-## 12. Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `cargo build` fails | Ensure Rust 1.75+: `rustup update stable` |
-| `nlr` not found | Add `~/.cargo/bin` to PATH or reinstall via npm |
-| Qdrant connection refused | Start container: `docker start $(docker ps -aqf "ancestor=qdrant/qdrant")` |
-| Neo4j connection refused | Start container: `docker start $(docker ps -aqf "ancestor=neo4j:5")` |
-| MCP server not found by Claude Code | Verify `~/.claude.json` has the `neuro-link-recursive` entry under `mcpServers` |
-| Hook not firing | Re-run `nlr init` and check `~/.claude/settings.json` |
-| Permission denied on hook | `chmod +x ~/.claude/hooks/*.sh` |
-| InfraNodus 401 | Regenerate API key at https://infranodus.com/settings |
-| Firecrawl rate limit | Check crawl interval in `config/crawl-ingest-update.md` |
-| `npx neuro-link-recursive` fails | Ensure Node.js 18+: `node --version` |
+## API keys reference
+
+| Key | Where to get | Used for |
+|-----|--------------|----------|
+| `INFRANODUS_API_KEY` | https://infranodus.com/settings | Reasoning ontologies, gap analysis |
+| `FIRECRAWL_API_KEY` | https://firecrawl.dev/app/api-keys | Web crawling in `crawl-ingest` |
+| `OPENROUTER_API_KEY` | https://openrouter.ai/keys | LLM fallback routing |
+| `CONTEXT7_API_KEY` | https://context7.com (optional) | Code-docs lookups |
+| `NGROK_AUTH_TOKEN` | https://dashboard.ngrok.com/get-started/your-authtoken | Public tunnel |
+| `NEO4J_PASSWORD` | you set when starting the container | Neo4j auth |
+| `NLR_API_TOKEN` | auto-generated by install scripts | Bearer auth on the HTTP API |
+| `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | https://modal.com (optional) | Cloud compute |
+| `KDENSE_API_KEY` | K-Dense dashboard (optional) | K-Dense harness bridge |
+
+All read from `secrets/.env` at startup. File is `.gitignored`.

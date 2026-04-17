@@ -27,13 +27,16 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: qdrant-nlr
     ports:
       - "6333:6333"
     volumes:
       - qdrant-data:/qdrant/storage
+    restart: unless-stopped
 
   neo4j:
     image: neo4j:5
+    container_name: neo4j-nlr
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -41,7 +44,31 @@ services:
       NEO4J_AUTH: neo4j/neurolink1234
     volumes:
       - neo4j-data:/data
+    restart: unless-stopped
+
+  # Obsidian headless — runs Obsidian over a web VNC so the runtime
+  # vault at ${OBSIDIAN_VAULT_PATH:-~/Vaults/neuro-link} can be opened
+  # remotely (browser → http://localhost:8501) and the
+  # neuro-link-recursive Obsidian plugin can be enabled without a desktop.
+  # See: https://docs.linuxserver.io/images/docker-obsidian/
+  obsidian-headless:
+    image: lscr.io/linuxserver/obsidian:latest
+    container_name: obsidian-nlr
+    ports:
+      - "8501:3000"   # web UI (HTTP)
+      - "8502:3001"   # web UI (HTTPS)
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "${TZ:-America/Los_Angeles}"
+      TITLE: "Neuro-Link Obsidian"
+    volumes:
+      - obsidian-config:/config
+      - ${OBSIDIAN_VAULT_PATH:-./02-KB-main}:/vaults/neuro-link
+    shm_size: "1gb"
+    restart: unless-stopped
 
 volumes:
   qdrant-data:
   neo4j-data:
+  obsidian-config:

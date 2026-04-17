@@ -186,6 +186,11 @@ fn detect_errors_ignored(session: &SessionSummary) -> Vec<QualityFlag> {
     for (i, turn) in session.turns.iter().enumerate() {
         for r in &turn.tool_results {
             if !r.is_error { continue; }
+            // SIGTERM (exit 143) and SIGKILL (137) are expected for deliberately-killed
+            // background processes (run_in_background=true). Skip these false positives.
+            if r.content_preview.contains("Exit code 143") || r.content_preview.contains("Exit code 137") {
+                continue;
+            }
             // Check the next assistant turn (if any) for error acknowledgement
             let next_assistant = session.turns.iter().skip(i + 1).find(|t| t.role == "assistant");
             let acknowledged = match next_assistant {
@@ -260,6 +265,16 @@ fn detect_loops(session: &SessionSummary) -> Vec<QualityFlag> {
         if positions.len() >= 2 && !window.contains("user:") {
             // Filter out trivial empty-tool windows
             if window.contains("assistant:,") && window.matches(',').count() < 3 { continue; }
+            // Sequential single-tool turns aren't a loop — they're just sequential work.
+            // E.g. "assistant:|assistant:|assistant:Bash" or three Read turns in a row.
+            // Only flag when the window contains a real repeated *pattern* of tools,
+            // i.e. at least 2 distinct non-empty tool sigs in the 3-turn window.
+            let parts: Vec<&str> = window.split('|').collect();
+            let tool_sigs: Vec<&str> = parts.iter()
+                .filter_map(|p| p.split_once(':').map(|(_, t)| t))
+                .filter(|t| !t.is_empty())
+                .collect();
+            if tool_sigs.len() < 2 { continue; }
             let turn = session.turns.get(*positions.last().unwrap_or(&0))
                 .map(|t| t.turn_num).unwrap_or(0);
             flags.push(QualityFlag {

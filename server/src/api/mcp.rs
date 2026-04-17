@@ -1,10 +1,32 @@
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    response::sse::{Event, KeepAlive, Sse},
+    Json,
+};
+use futures_util::stream::{self, Stream};
 use serde_json::{json, Value};
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use walkdir::WalkDir;
 
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::tools::ToolRegistry;
+
+/// GET /mcp — Streamable HTTP transport server→client SSE channel.
+/// Clients (K-Dense web, Claude Desktop streaming transport, etc.) open this
+/// to receive notifications. We emit a ready event then keep-alive.
+pub async fn handle_mcp_sse() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let initial = Event::default()
+        .event("ready")
+        .data(r#"{"protocol":"mcp","version":"2025-03-26"}"#);
+    let s = stream::once(async { Ok::<Event, Infallible>(initial) });
+    Sse::new(s).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
+}
 
 pub async fn handle_mcp(
     State(registry): State<Arc<ToolRegistry>>,

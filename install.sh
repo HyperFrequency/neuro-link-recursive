@@ -1,7 +1,37 @@
 #!/usr/bin/env bash
-# neuro-link-recursive: full install from scratch on macOS
-# Idempotent — safe to re-run. Checks before installing anything.
+# neuro-link-recursive — one-shot installer.
+#
+# Two ways to use this:
+#   1. From a clone:    ./install.sh [--mode local|cloud|hybrid]
+#   2. curl | bash:     curl -fsSL https://raw.githubusercontent.com/HyperFrequency/neuro-link-recursive/master/install.sh | bash
+#
+# The curl|bash path will: (a) clone the repo to ~/neuro-link-recursive if missing,
+# (b) cd into it, (c) re-exec install.sh from that clone. Idempotent — safe to re-run.
+#
+# What this script does (delegates the heavy lifting to setup-deps.sh):
+#   - System tools (brew, git, rust, node)
+#   - cargo build --release of the neuro-link binary
+#   - Obsidian plugin build
+#   - Calls setup-deps.sh for: Docker containers, ollama models, llama.cpp,
+#     Octen GGUF, Claude skills/hooks symlinks, MCP registration
+#   - Symlinks neuro-link to ~/.cargo/bin or /usr/local/bin
+#   - Installs the Obsidian plugin into detected vaults
+#   - Final verification (calls test-runtime.sh if available)
 set -euo pipefail
+
+# ── curl|bash bootstrap ──────────────────────────────────────────────────────
+# If we were piped from curl (no script file), clone the repo and re-exec.
+if [[ "${BASH_SOURCE[0]:-}" == "" || "${BASH_SOURCE[0]}" == "stdin" || ! -f "${BASH_SOURCE[0]}" ]]; then
+  CLONE_DIR="${NLR_INSTALL_DIR:-$HOME/neuro-link-recursive}"
+  if [[ ! -d "$CLONE_DIR/.git" ]]; then
+    echo "[install] cloning HyperFrequency/neuro-link-recursive → $CLONE_DIR"
+    git clone --depth 1 https://github.com/HyperFrequency/neuro-link-recursive.git "$CLONE_DIR"
+  else
+    echo "[install] repo present at $CLONE_DIR — pulling latest"
+    (cd "$CLONE_DIR" && git pull --ff-only) || true
+  fi
+  exec bash "$CLONE_DIR/install.sh" "$@"
+fi
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -625,3 +655,26 @@ info "Config: edit ${NLR_ROOT}/secrets/.env with your API keys"
 info "Docs:   see INSTALL.md and SETUP.md for full reference"
 info "Next:   run 'neuro-link status' to verify all components"
 echo ""
+
+# ============================================================================
+# Optional end-to-end smoke test
+# ============================================================================
+TEST_SCRIPT=""
+for candidate in \
+  "${NLR_ROOT}/test-runtime.sh" \
+  "${NLR_ROOT}/.claude/worktrees/compassionate-franklin-2583d0/test-runtime.sh" \
+  "${HOME}/neuro-link/.claude/worktrees/compassionate-franklin-2583d0/test-runtime.sh"; do
+  if [[ -x "$candidate" ]]; then TEST_SCRIPT="$candidate"; break; fi
+done
+
+if [[ -n "$TEST_SCRIPT" ]]; then
+  step "Runtime smoke test"
+  TOKEN_FROM_ENV=$(grep -E '^NLR_API_TOKEN=' "${NLR_ROOT}/secrets/.env" 2>/dev/null | cut -d= -f2- || true)
+  if [[ -n "$TOKEN_FROM_ENV" ]]; then
+    info "Running $TEST_SCRIPT (requires services up)..."
+    NLR_API_TOKEN="$TOKEN_FROM_ENV" "$TEST_SCRIPT" || warn "smoke test reported failures — see output above"
+  else
+    warn "NLR_API_TOKEN missing in secrets/.env — skipping smoke test"
+    info "Run manually: NLR_API_TOKEN=... $TEST_SCRIPT"
+  fi
+fi

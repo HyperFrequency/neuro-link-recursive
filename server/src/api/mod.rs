@@ -32,8 +32,8 @@ pub fn build_router(registry: Arc<ToolRegistry>) -> Router {
         .route("/dashboard", get(dashboard));
 
     let protected_routes = Router::new()
-        // MCP JSON-RPC over HTTP
-        .route("/mcp", post(mcp::handle_mcp))
+        // MCP Streamable HTTP transport: GET for SSE server→client stream, POST for client→server JSON-RPC
+        .route("/mcp", get(mcp::handle_mcp_sse).post(mcp::handle_mcp))
         // REST API v1
         .nest("/api/v1", rest::routes())
         // LLM API passthrough proxy (captures every LLM request/response)

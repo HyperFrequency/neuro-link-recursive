@@ -10,6 +10,7 @@ pub mod scan;
 pub mod llm_logs;
 pub mod hooks_log;
 pub mod sessions_tools;
+pub mod external;
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};

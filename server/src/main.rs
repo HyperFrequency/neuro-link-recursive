@@ -9,6 +9,7 @@ mod graph;
 mod heartbeat;
 mod init;
 mod protocol;
+mod security;
 mod sessions;
 mod state;
 mod supervisor;

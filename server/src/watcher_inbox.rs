@@ -14,6 +14,10 @@ pub async fn run(root: PathBuf) -> Result<()> {
 }
 
 fn blocking_run(root: PathBuf) -> Result<()> {
+    // Canonicalize root so parent-equality checks work when root contains symlinks.
+    // macOS FSEvents delivers events with resolved paths; if root has symlinks the
+    // parent comparison `parent == root.join("00-raw")` would fail silently.
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
     let raw_dir = root.join("00-raw");
     let task_dir = root.join("07-neuro-link-task");
     let (tx, rx) = mpsc::channel();
@@ -50,7 +54,16 @@ fn blocking_run(root: PathBuf) -> Result<()> {
 }
 
 fn handle_event(root: &Path, event: &Event, seen: &mut HashMap<PathBuf, Instant>) -> Result<()> {
-    if !matches!(event.kind, EventKind::Create(notify::event::CreateKind::File)) {
+    // macOS FSEvents emits Create(Any) and Modify(Name(RenameMode::To)) for editor-saved
+    // files (atomic rename pattern). Linux inotify emits Create(File). Match all the real
+    // "a new file appeared here" shapes.
+    use notify::event::{CreateKind, ModifyKind, RenameMode};
+    let is_new_file = matches!(
+        event.kind,
+        EventKind::Create(CreateKind::File | CreateKind::Any)
+            | EventKind::Modify(ModifyKind::Name(RenameMode::To))
+    );
+    if !is_new_file {
         return Ok(());
     }
 
@@ -58,15 +71,31 @@ fn handle_event(root: &Path, event: &Event, seen: &mut HashMap<PathBuf, Instant>
         if !should_process(path) {
             continue;
         }
+        // Confirm the file actually exists + is non-empty before processing — some editors
+        // fire events mid-write and the file may be zero-byte.
+        match std::fs::metadata(path) {
+            Ok(m) if m.is_file() && m.len() > 0 => {}
+            _ => continue,
+        }
         if is_debounced(path, seen) {
             continue;
         }
 
-        let parent = path.parent();
-        if parent == Some(root.join("00-raw").as_path()) {
+        // Canonicalize event path's parent for symlink-safe comparison.
+        let parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
+        let raw_dir = std::fs::canonicalize(root.join("00-raw")).ok();
+        let task_dir = std::fs::canonicalize(root.join("07-neuro-link-task")).ok();
+        if parent.is_some() && parent == raw_dir {
+            tracing::info!("loose drop detected: {}", path.display());
             handle_loose_drop(root, path)?;
-        } else if parent == Some(root.join("07-neuro-link-task").as_path()) {
+        } else if parent.is_some() && parent == task_dir {
+            tracing::info!("task drop detected: {}", path.display());
             handle_task_drop(root, path)?;
+        } else {
+            tracing::debug!(
+                "unmatched event parent={:?} raw={:?} task={:?}",
+                parent, raw_dir, task_dir
+            );
         }
     }
 

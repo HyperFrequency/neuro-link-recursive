@@ -146,6 +146,14 @@ pub async fn run_once(root: &Path, registry: &ToolRegistry) {
             "high_cost_calls": high_cost_calls,
         });
 
+        // H1: apply any approved proposals before writing new ones so
+        // downstream actions fire on the same tick as human approval.
+        match scan_approved_proposals(root) {
+            Ok(n) if n > 0 => info!("HITL reader applied {n} approved proposal(s)"),
+            Ok(_) => {}
+            Err(e) => warn!("HITL scan failed: {e}"),
+        }
+
         // Regression proposals.
         let mut proposals_written = 0u64;
         for sev in &severities {
@@ -498,5 +506,181 @@ fn recommended_action(sev: &MetricSeverity) -> String {
             Severity::Good => "No action required.".into(),
         },
         _ => "Review metric and propose a remediation.".into(),
+    }
+}
+
+/// H1: Scan `05-self-improvement-HITL/proposals/` for approved proposals.
+///
+/// For each file whose frontmatter has `status: approved`, dispatch an apply
+/// action based on `type:` and mark the proposal `status: applied` with an
+/// `applied_at:` timestamp so we don't re-fire.
+///
+/// Default behavior is dry-run (log only). Set `NLR_HITL_APPLY=1` to actually
+/// run the side effects. Dry-run still updates the status to `applied` so the
+/// reader is idempotent across passes.
+pub fn scan_approved_proposals(root: &Path) -> Result<u64> {
+    let dir = root.join("05-self-improvement-HITL/proposals");
+    if !dir.is_dir() {
+        return Ok(0);
+    }
+    let dry_run = std::env::var("NLR_HITL_APPLY").ok().as_deref() != Some("1");
+    let mut applied = 0u64;
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.extension().is_some_and(|e| e == "md") {
+            continue;
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let fm = parse_proposal_frontmatter(&content);
+        let status = fm.get("status").map(String::as_str).unwrap_or("");
+        if status != "approved" {
+            continue;
+        }
+        let proposal_type = fm
+            .get("type")
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+        let metric = fm
+            .get("metric")
+            .cloned()
+            .unwrap_or_else(|| "n/a".to_string());
+        let action = fm
+            .get("recommended_action")
+            .cloned()
+            .unwrap_or_else(|| "".to_string());
+
+        if dry_run {
+            info!(
+                "[HITL dry-run] would apply proposal {} type={} metric={} action=\"{}\"",
+                path.display(),
+                proposal_type,
+                metric,
+                action
+            );
+        } else {
+            info!(
+                "[HITL apply] {} type={} metric={} action=\"{}\"",
+                path.display(),
+                proposal_type,
+                metric,
+                action
+            );
+            // Real side effects wired per type would go here. For now we log + flip
+            // the marker; the first concrete apply (e.g. re-run `neuro-link embed`
+            // for rag_hit_rate) can be added when the action matrix is agreed.
+        }
+
+        if let Err(e) = mark_proposal_applied(&path, &content) {
+            warn!("failed to mark {} applied: {e}", path.display());
+            continue;
+        }
+        applied += 1;
+    }
+    Ok(applied)
+}
+
+/// Parse a `---\n...\n---\n` frontmatter block into a map.
+fn parse_proposal_frontmatter(content: &str) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
+    let trimmed = content.trim_start();
+    let Some(after_open) = trimmed.strip_prefix("---\n") else {
+        return map;
+    };
+    let Some(close) = after_open.find("\n---") else {
+        return map;
+    };
+    let yaml = &after_open[..close];
+    for line in yaml.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim().to_string();
+            let val = v.trim().trim_matches('"').to_string();
+            if !key.is_empty() {
+                map.insert(key, val);
+            }
+        }
+    }
+    map
+}
+
+/// Flip `status: approved` to `status: applied` and append `applied_at:` so the
+/// proposal isn't picked up a second time.
+fn mark_proposal_applied(path: &Path, content: &str) -> Result<()> {
+    let ts = Utc::now().to_rfc3339();
+    let updated: String = content
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("status:") {
+                "status: applied".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Insert `applied_at:` just before the closing `---`.
+    let final_text = if let Some(end) = updated.find("\n---\n") {
+        let (head, tail) = updated.split_at(end);
+        format!("{head}\napplied_at: {ts}{tail}")
+    } else {
+        updated
+    };
+    // Preserve trailing newline if present in original.
+    let with_newline = if content.ends_with('\n') && !final_text.ends_with('\n') {
+        format!("{final_text}\n")
+    } else {
+        final_text
+    };
+    let tmp = path.with_extension("md.tmp");
+    fs::write(&tmp, with_newline)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_approved_marks_applied_and_leaves_pending_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("05-self-improvement-HITL/proposals");
+        fs::create_dir_all(&dir).unwrap();
+
+        let approved = dir.join("2026-04-17-metric-warn.md");
+        fs::write(
+            &approved,
+            "---\ntype: self-improvement\nstatus: approved\nmetric: rag_hit_rate\nrecommended_action: rebuild index\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let pending = dir.join("2026-04-17-other-warn.md");
+        fs::write(
+            &pending,
+            "---\ntype: self-improvement\nstatus: pending\nmetric: latency\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        // Ensure we run in dry-run mode regardless of ambient env.
+        std::env::remove_var("NLR_HITL_APPLY");
+
+        let count = scan_approved_proposals(root).unwrap();
+        assert_eq!(count, 1, "exactly one approved proposal processed");
+
+        let approved_now = fs::read_to_string(&approved).unwrap();
+        assert!(approved_now.contains("status: applied"));
+        assert!(approved_now.contains("applied_at:"));
+
+        let pending_now = fs::read_to_string(&pending).unwrap();
+        assert!(pending_now.contains("status: pending"));
+        assert!(!pending_now.contains("applied_at:"));
+
+        // Idempotent: second pass should find nothing left to apply.
+        let count2 = scan_approved_proposals(root).unwrap();
+        assert_eq!(count2, 0);
     }
 }

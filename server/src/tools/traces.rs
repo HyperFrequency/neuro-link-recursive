@@ -37,22 +37,54 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
     }
 }
 
+/// Sanitize a session id to match the Python writer's allowlist
+/// (`hooks/trace_logger.py` uses `re.sub(r'[^A-Za-z0-9_\-]', '_', ...)[:128]`).
+/// Keeps only `[A-Za-z0-9_-]`; all other chars (including `/`, `.`, `\`) become `_`.
+fn sanitize_session(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(128)
+        .collect()
+}
+
 fn trace_read(args: &Value, root: &Path) -> Result<String> {
-    let session = args
+    let raw_session = args
         .get("session")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim();
-    if session.is_empty() {
+    if raw_session.is_empty() {
         bail!("session is required");
     }
+    let session = sanitize_session(raw_session);
+    if session.is_empty() {
+        bail!("invalid session id");
+    }
 
-    let dir = root.join("state").join("traces").join(session);
+    let traces_root = root.join("state").join("traces");
+    let dir = traces_root.join(&session);
     if !dir.is_dir() {
         bail!("no traces for session '{session}'");
     }
 
-    let mut files = collect_trace_files(&dir)?;
+    // Defense-in-depth: canonicalize and assert `dir` is inside `state/traces/`.
+    let traces_root_canon = traces_root
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", traces_root.display()))?;
+    let dir_canon = dir
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", dir.display()))?;
+    if !dir_canon.starts_with(&traces_root_canon) {
+        bail!("Access denied: path outside state/traces");
+    }
+
+    let mut files = collect_trace_files(&dir_canon)?;
     if files.is_empty() {
         bail!("no traces for session '{session}'");
     }
@@ -236,5 +268,40 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let err = trace_read(&json!({"session": ""}), tmp.path()).unwrap_err();
         assert_eq!(err.to_string(), "session is required");
+    }
+
+    #[test]
+    fn trace_read_rejects_path_traversal() {
+        // Layout: <tmp>/state/traces/ (safe root) and <tmp>/secret/leak.jsonl.gz (outside).
+        let tmp = TempDir::new().unwrap();
+        let traces_root = tmp.path().join("state").join("traces");
+        fs::create_dir_all(&traces_root).unwrap();
+        let secret_dir = tmp.path().join("secret");
+        fs::create_dir_all(&secret_dir).unwrap();
+        write_gz(&secret_dir.join("00001-1.jsonl.gz"), &sample(1.0, "leak"));
+
+        // 1. Classic `../` traversal: chars are sanitized to `_`, so the
+        //    resulting path is `state/traces/_________` — guaranteed not to
+        //    exist, so we bail with "no traces for session".
+        let err = trace_read(&json!({"session": "../../secret"}), tmp.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no traces for session") || msg.contains("invalid session id"),
+            "expected traversal rejection, got: {msg}"
+        );
+
+        // 2. Symlink escape: `state/traces/escape -> ../../secret` — the
+        //    sanitized name passes the allowlist but canonicalize() resolves
+        //    outside state/traces/, so the starts_with check must reject.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&secret_dir, traces_root.join("escape")).unwrap();
+            let err = trace_read(&json!({"session": "escape"}), tmp.path()).unwrap_err();
+            assert!(
+                err.to_string().contains("Access denied: path outside state/traces"),
+                "expected access-denied via canonicalize check, got: {err}"
+            );
+        }
     }
 }

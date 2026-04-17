@@ -476,9 +476,12 @@ mod tests {
         });
 
         assert!(!path.exists(), "accepted file should be moved out of _incoming/");
-        assert!(root.join("00-raw/clean/source.md").exists());
-        // Classified + curated via the normal pipeline.
-        assert!(root.join("02-KB-main/swe/clean.md").exists());
+        // A-fu2: classify MOVES source.md; .classified marker left behind.
+        assert!(!root.join("00-raw/clean/source.md").exists());
+        assert!(root.join("00-raw/clean/.classified").exists());
+        assert!(root.join("01-sorted/software-engineering/clean.md").exists());
+        // No 02-KB-main stub per feedback_auto_stub_pages.md.
+        assert!(!root.join("02-KB-main/swe/clean.md").exists());
     }
 
     #[test]

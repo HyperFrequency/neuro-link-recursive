@@ -2,6 +2,7 @@
 
 pub mod wiki;
 pub mod rag;
+pub mod rag_verified;
 pub mod ontology;
 pub mod ingest;
 pub mod tasks;
@@ -37,6 +38,7 @@ impl ToolRegistry {
         let mut tools = Vec::new();
         tools.extend(wiki::tool_defs());
         tools.extend(rag::tool_defs());
+        tools.extend(rag_verified::tool_defs());
         tools.extend(ontology::tool_defs());
         tools.extend(ingest::tool_defs());
         tools.extend(tasks::tool_defs());
@@ -56,6 +58,7 @@ impl ToolRegistry {
     pub fn call(&self, name: &str, args: &Value) -> Result<String> {
         match name {
             n if n.starts_with("nlr_wiki_") => wiki::call(n, args, &self.root),
+            "nlr_rag_query_verified" => rag_verified::call(name, args, &self.root),
             n if n.starts_with("nlr_rag_") => rag::call(n, args, &self.root),
             n if n.starts_with("nlr_ontology_") => ontology::call(n, args, &self.root),
             n if n.starts_with("nlr_ingest") => ingest::call(n, args, &self.root),

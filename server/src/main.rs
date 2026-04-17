@@ -369,6 +369,33 @@ async fn run_cli(cmd: Commands) -> Result<()> {
                     println!("  {}: {e}", "!".red());
                 }
             }
+
+            // NLR_ROOT resolution diagnostic (P05).
+            // Reports env var, contents of ~/.claude/state/nlr_root, whether
+            // the resolved directory exists, and warns on mismatch.
+            let diag = config::diagnose_nlr_root();
+            let env_disp = if diag.env.is_empty() {
+                "<unset>".to_string()
+            } else {
+                diag.env.clone()
+            };
+            let file_disp = if diag.file.is_empty() {
+                "<missing>".to_string()
+            } else {
+                diag.file.clone()
+            };
+            println!(
+                "  NLR_ROOT resolution: env={} file={} dir_exists={}",
+                env_disp, file_disp, diag.dir_exists
+            );
+            if diag.mismatch {
+                println!(
+                    "  {}: NLR_ROOT env ({}) != ~/.claude/state/nlr_root ({})",
+                    "WARN".yellow().bold(),
+                    env_disp,
+                    file_disp
+                );
+            }
         }
 
         Commands::Ingest { sources, parallel } => {

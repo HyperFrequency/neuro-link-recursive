@@ -12,6 +12,8 @@ pub mod scan;
 pub mod llm_logs;
 pub mod hooks_log;
 pub mod sessions_tools;
+pub mod session_state;
+pub mod graph_traverse;
 pub mod math;
 pub mod traces;
 pub mod external;
@@ -52,6 +54,8 @@ impl ToolRegistry {
         tools.extend(llm_logs::tool_defs());
         tools.extend(hooks_log::tool_defs());
         tools.extend(sessions_tools::tool_defs());
+        tools.extend(session_state::tool_defs());
+        tools.extend(graph_traverse::tool_defs());
         tools.extend(math::tool_defs());
         tools.extend(traces::tool_defs());
         // State tools
@@ -76,6 +80,8 @@ impl ToolRegistry {
             n if n.starts_with("nlr_llm_logs_") => llm_logs::call(n, args, &self.root),
             n if n.starts_with("nlr_hooks_log_") => hooks_log::call(n, args, &self.root),
             n if n.starts_with("nlr_sessions_") => sessions_tools::call(n, args, &self.root),
+            "nlr_session_context" => session_state::call("nlr_session_context", args, &self.root),
+            n if n.starts_with("nlr_graph_") => graph_traverse::call(n, args, &self.root),
             n if n.starts_with("nlr_math_") => math::call(n, args, &self.root),
             n if n.starts_with("nlr_trace_") => traces::call(n, args, &self.root),
             "nlr_state_heartbeat" => {

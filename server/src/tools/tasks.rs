@@ -8,6 +8,7 @@ pub fn tool_defs() -> Vec<Value> {
         json!({"name":"nlr_task_list","description":"List tasks from 07-neuro-link-task/","inputSchema":{"type":"object","properties":{"status_filter":{"type":"string","enum":["pending","running","completed","failed","all"]}}}}),
         json!({"name":"nlr_task_create","description":"Create a new task file","inputSchema":{"type":"object","properties":{"title":{"type":"string"},"type":{"type":"string"},"priority":{"type":"integer"},"body":{"type":"string"}},"required":["title","type"]}}),
         json!({"name":"nlr_task_update","description":"Update task status","inputSchema":{"type":"object","properties":{"filename":{"type":"string"},"status":{"type":"string","enum":["pending","running","completed","failed"]}},"required":["filename","status"]}}),
+        json!({"name":"nlr_task_dispatch","description":"Force-dispatch a task file through the job-scanner dispatcher (manual retry override)","inputSchema":{"type":"object","properties":{"filename":{"type":"string","description":"Task filename in 07-neuro-link-task/"}},"required":["filename"]}}),
     ]
 }
 
@@ -52,6 +53,18 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
             let updated = regex::Regex::new(r"status:\s*\w+")?.replace(&content, &format!("status: {new_status}")).to_string();
             fs::write(&path, updated)?;
             Ok(format!("Updated {filename} → {new_status}"))
+        }
+        "nlr_task_dispatch" => {
+            let filename = args["filename"].as_str().unwrap_or("");
+            if filename.is_empty() { bail!("filename required"); }
+            // Block traversal: only allow bare filenames, not paths.
+            if filename.contains('/') || filename.contains("..") {
+                bail!("invalid filename: path traversal not allowed");
+            }
+            let path = task_dir.join(filename);
+            if !path.exists() { bail!("Task not found: {filename}"); }
+            let outcome = super::dispatcher::dispatch_task(root, &path)?;
+            Ok(serde_json::to_string_pretty(&outcome)?)
         }
         _ => bail!("Unknown task tool: {name}"),
     }

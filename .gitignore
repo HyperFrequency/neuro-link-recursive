@@ -21,6 +21,9 @@ state/bm25_index.json
 state/supervisor.json
 state/workflows.json
 state/heartbeat.json
+state/job_log.jsonl
+state/job_errors.jsonl
+state/agent_queue.jsonl
 
 # Test artifacts
 00-raw/test200*/
@@ -46,3 +49,8 @@ saas/web/node_modules/
 01-sorted/**/*.md
 !01-sorted/.gitkeep
 models/
+
+# Math ingest mirrors (mirrors live sources; fetched on demand)
+state/mirrors/
+scripts/math_ingest/__pycache__/
+scripts/math_ingest/.pytest_cache/

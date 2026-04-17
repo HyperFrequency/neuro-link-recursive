@@ -35,13 +35,26 @@ step() { printf "\n${BOLD}=== %s ===${NC}\n" "$1"; }
 FROM_INSTALL=""
 SKIP_MODELS=""
 SKIP_MCP=""
+EXPOSE_ALL=""
+ACCEPT_SECURITY=""
 for arg in "$@"; do
   case "$arg" in
     --from-install) FROM_INSTALL="1" ;;
     --skip-models)  SKIP_MODELS="1" ;;
     --skip-mcp)     SKIP_MCP="1" ;;
+    --expose-all)   EXPOSE_ALL="1" ;;
+    --accept-security-model) ACCEPT_SECURITY="1" ;;
   esac
 done
+
+# ── Port-bind posture ──
+# Default: runtime services bind to 127.0.0.1 (loopback only).
+# --expose-all: flip to 0.0.0.0 with an explicit LAN-exposure warning + consent.
+if [[ -n "$EXPOSE_ALL" ]]; then
+  BIND_PREFIX=""
+else
+  BIND_PREFIX="127.0.0.1:"
+fi
 
 NLR_ROOT="${NLR_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
 RUNTIME_ROOT="${HOME}/neuro-link"
@@ -53,6 +66,93 @@ if [[ -z "$FROM_INSTALL" ]]; then
   printf "  runtime    : %s\n" "$RUNTIME_ROOT"
   echo ""
 fi
+
+# ============================================================================
+# Security model gate (C6) — print summary, refuse world-readable secrets,
+# require --accept-security-model or interactive y/N.
+# ============================================================================
+
+security_summary() {
+  local bind_label="127.0.0.1 (loopback only)"
+  [[ -n "$EXPOSE_ALL" ]] && bind_label="0.0.0.0 (LAN EXPOSED — --expose-all)"
+
+  printf "\n${BOLD}━━━ Security summary ━━━${NC}\n"
+  printf "Port bindings (runtime services):\n"
+  printf "  neuro-link API  :8080    %s   (bearer-auth enforced)\n" "$bind_label"
+  printf "  Qdrant          :6333    %s   (no auth — must not be LAN-exposed)\n" "$bind_label"
+  printf "  Neo4j HTTP      :7474    %s   (NEO4J_PASSWORD required)\n" "$bind_label"
+  printf "  Neo4j Bolt      :7687    %s   (NEO4J_PASSWORD required)\n" "$bind_label"
+  printf "  Obsidian noVNC  :8501    %s   (CVSS 9.6 — LAN expose NEVER)\n" "$bind_label"
+  printf "\nSecrets / token generation:\n"
+  printf "  NLR_API_TOKEN   will be auto-generated on first \`neuro-link serve --token auto\`\n"
+  printf "  NEO4J_PASSWORD  will be auto-generated (32 chars) if missing from secrets/.env\n"
+  printf "\nFiles that will be written:\n"
+  printf "  secrets/.env                      (mode 0600, gitignored)\n"
+  printf "  state/security-accepted.txt       (acceptance timestamp)\n"
+  printf "  ~/.claude/skills/neuro-link-*     (symlinks to skills/)\n"
+  printf "  ~/.claude/hooks/*                 (symlinks to hooks/)\n"
+  printf "  ~/.claude/state/nlr_root          (NLR_ROOT persistence)\n"
+  printf "\nThreat model:\n"
+  printf "  See %s/.planning/security-threats.md\n" "$NLR_ROOT"
+  printf "  See %s/docs/rotate-neo4j-password.md\n" "$NLR_ROOT"
+  printf "\n"
+  if [[ -n "$EXPOSE_ALL" ]]; then
+    printf "${RED}${BOLD}WARNING:${NC} --expose-all flips bindings to 0.0.0.0. Anyone on your LAN\n"
+    printf "${RED}${BOLD}        :${NC} can reach Qdrant (no auth) and attempt Neo4j brute-force.\n"
+    printf "${RED}${BOLD}        :${NC} This is NEVER safe on untrusted networks (cafe, hotel, etc).\n"
+    printf "\n"
+  fi
+}
+
+security_gate() {
+  # Refuse to proceed if secrets/.env is world-readable.
+  if [[ -f "${NLR_ROOT}/secrets/.env" ]]; then
+    local mode
+    mode=$(stat -f '%Lp' "${NLR_ROOT}/secrets/.env" 2>/dev/null || stat -c '%a' "${NLR_ROOT}/secrets/.env" 2>/dev/null)
+    if [[ -n "$mode" ]]; then
+      # Last digit = "other" perm; non-zero means world-readable.
+      local other="${mode: -1}"
+      if [[ "$other" != "0" ]]; then
+        fail "secrets/.env is world-readable (mode ${mode}). Run: chmod 600 secrets/.env"
+        exit 2
+      fi
+    fi
+  fi
+
+  # Print summary.
+  security_summary
+
+  # Interactive consent (unless --accept-security-model, --from-install, or non-interactive).
+  if [[ -z "$ACCEPT_SECURITY" && -z "$FROM_INSTALL" ]]; then
+    if [[ -t 0 && -t 1 ]]; then
+      read -r -p "Proceed with this security posture? [y/N] " reply
+      case "$reply" in
+        [yY]|[yY][eE][sS]) : ;;
+        *)
+          warn "Aborted by user. Re-run with --accept-security-model to bypass this prompt."
+          exit 1
+          ;;
+      esac
+    else
+      fail "Non-interactive shell detected without --accept-security-model. Aborting."
+      fail "Re-run with: bash setup-deps.sh --accept-security-model"
+      exit 2
+    fi
+  fi
+
+  # Log acceptance.
+  mkdir -p "${NLR_ROOT}/state"
+  {
+    printf "accepted_at=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf "expose_all=%s\n" "${EXPOSE_ALL:-0}"
+    printf "bind_prefix=%s\n" "${BIND_PREFIX:-0.0.0.0:}"
+    printf "accepted_by_user=%s\n" "${USER:-unknown}"
+    printf "accepted_by_host=%s\n" "$(hostname)"
+  } >> "${NLR_ROOT}/state/security-accepted.txt"
+  ok "Security model accepted (logged to state/security-accepted.txt)"
+}
+
+security_gate
 
 # ============================================================================
 step "1/6  CLI dependencies (brew, docker, jq, ngrok, ollama, llama.cpp)"
@@ -173,11 +273,11 @@ else
       info "Starting existing Qdrant container..."
       docker start "$QDRANT_STOPPED" >/dev/null && ok "Qdrant restarted"
     else
-      info "Starting Qdrant via docker run..."
-      docker run -d --name qdrant-nlr -p 6333:6333 \
+      info "Starting Qdrant via docker run (bind ${BIND_PREFIX:-0.0.0.0:}6333)..."
+      docker run -d --name qdrant-nlr -p "${BIND_PREFIX}6333:6333" \
         -v qdrant_nlr_storage:/qdrant/storage \
         --restart unless-stopped qdrant/qdrant:latest >/dev/null
-      ok "Qdrant started on :6333"
+      ok "Qdrant started on ${BIND_PREFIX:-0.0.0.0:}6333"
     fi
     sleep 2
   fi
@@ -187,10 +287,41 @@ else
   if ! curl -sf http://localhost:7474 &>/dev/null; then
     NEO4J_RUNNING=$(docker ps --filter "ancestor=neo4j:5" --format "{{.ID}}" 2>/dev/null || true)
     NEO4J_STOPPED=$(docker ps -a --filter "ancestor=neo4j:5" --filter "status=exited" --format "{{.ID}}" 2>/dev/null || true)
-    NEO4J_PASS="neurolink1234"
-    if [[ -f "${NLR_ROOT}/secrets/.env" ]]; then
-      EXTRACTED=$(grep '^NEO4J_PASSWORD=' "${NLR_ROOT}/secrets/.env" 2>/dev/null | cut -d= -f2-)
-      [[ -n "$EXTRACTED" ]] && NEO4J_PASS="$EXTRACTED"
+
+    # Ensure secrets/.env exists + contains a non-empty NEO4J_PASSWORD.
+    # If missing or empty, generate a 32-char alphanumeric random password and
+    # persist (mode 0600) — this closes the hardcoded-password threat (T2).
+    mkdir -p "${NLR_ROOT}/secrets"
+    ENV_FILE="${NLR_ROOT}/secrets/.env"
+    if [[ ! -f "$ENV_FILE" ]]; then
+      # Seed from template if available.
+      if [[ -f "${NLR_ROOT}/secrets/.env.example" ]]; then
+        cp "${NLR_ROOT}/secrets/.env.example" "$ENV_FILE"
+      else
+        touch "$ENV_FILE"
+      fi
+      chmod 600 "$ENV_FILE"
+    fi
+
+    # Extract existing password (if any). Support both `=value` and `= value` forms.
+    EXTRACTED=$(grep '^NEO4J_PASSWORD=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' ' || true)
+    if [[ -z "$EXTRACTED" ]]; then
+      info "Generating a 32-char random NEO4J_PASSWORD (persisted to secrets/.env)"
+      GENERATED=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+      # Remove any empty NEO4J_PASSWORD line, then append.
+      # macOS sed requires -i '' for in-place, GNU sed accepts -i alone.
+      if sed --version >/dev/null 2>&1; then
+        sed -i '/^NEO4J_PASSWORD=$/d; /^NEO4J_PASSWORD= *$/d' "$ENV_FILE"
+      else
+        sed -i '' '/^NEO4J_PASSWORD=$/d; /^NEO4J_PASSWORD= *$/d' "$ENV_FILE"
+      fi
+      printf "NEO4J_PASSWORD=%s\n" "$GENERATED" >> "$ENV_FILE"
+      chmod 600 "$ENV_FILE"
+      NEO4J_PASS="$GENERATED"
+      ok "NEO4J_PASSWORD generated (32 chars)"
+    else
+      NEO4J_PASS="$EXTRACTED"
+      ok "NEO4J_PASSWORD found in secrets/.env"
     fi
     if [[ -n "$NEO4J_RUNNING" ]]; then
       ok "Neo4j already running"
@@ -198,12 +329,13 @@ else
       info "Starting existing Neo4j container..."
       docker start "$NEO4J_STOPPED" >/dev/null && ok "Neo4j restarted"
     else
-      info "Starting Neo4j via docker run..."
-      docker run -d --name neo4j-nlr -p 7474:7474 -p 7687:7687 \
+      info "Starting Neo4j via docker run (bind ${BIND_PREFIX:-0.0.0.0:}7474, ${BIND_PREFIX:-0.0.0.0:}7687)..."
+      docker run -d --name neo4j-nlr \
+        -p "${BIND_PREFIX}7474:7474" -p "${BIND_PREFIX}7687:7687" \
         -e NEO4J_AUTH="neo4j/${NEO4J_PASS}" \
         -v neo4j_nlr_data:/data \
         --restart unless-stopped neo4j:5 >/dev/null
-      ok "Neo4j started on :7474 (bolt :7687)"
+      ok "Neo4j started on ${BIND_PREFIX:-0.0.0.0:}7474 (bolt ${BIND_PREFIX:-0.0.0.0:}7687)"
     fi
   fi
   curl -sf http://localhost:7474 &>/dev/null && ok "Neo4j healthy" || warn "Neo4j health check failed"

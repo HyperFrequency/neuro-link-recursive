@@ -3,12 +3,14 @@ mod bm25;
 mod cli;
 mod config;
 mod crawl;
+mod curate_backlog;
 mod embed;
 mod grade;
 mod graph;
 mod heartbeat;
 mod init;
 mod protocol;
+mod resort;
 mod security;
 mod sessions;
 mod state;
@@ -512,6 +514,29 @@ async fn run_cli(cmd: Commands) -> Result<()> {
                 .unwrap_or_else(|_| "http://localhost:6333".into());
             let count = embed::embed_wiki(&root, &qdrant_url, recreate).await?;
             println!("{} Embedded {count} pages into Qdrant", "OK".green());
+        }
+
+        Commands::Resort => {
+            let report = resort::resort(&root)?;
+            println!(
+                "{} Resort: moved {} slug(s), skipped {} (already classified)",
+                "OK".green().bold(),
+                report.moved,
+                report.skipped
+            );
+        }
+
+        Commands::CurateBacklog { limit } => {
+            let report =
+                curate_backlog::drain(&root, limit, &curate_backlog::ClaudeCurator)?;
+            println!(
+                "{} Curate-backlog: attempted {}, ok {}, failed {}, remaining {}",
+                "OK".green().bold(),
+                report.attempted,
+                report.succeeded,
+                report.failed,
+                report.remaining
+            );
         }
 
         Commands::Grade { session, wiki } => {

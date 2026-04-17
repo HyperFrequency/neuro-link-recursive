@@ -182,6 +182,54 @@ def _strip_html(html: str) -> str:
     return _html_unescape(_TAG_RE.sub("", html or ""))
 
 
+def _strip_displaystyle(text: str) -> str:
+    """Unwrap ``{\\displaystyle …}`` wrappers using a balanced-brace walker.
+
+    Wikipedia's plaintext extracts sometimes leak MathML display markers such
+    as ``{\\displaystyle \\|f\\|_{p}}``. A naive ``[^}]*`` regex trips on the
+    nested ``_{p}`` group and mangles the LaTeX. Walking character-by-character
+    with a brace depth counter lets us find the matching outer ``}`` and keep
+    the inner TeX intact.
+    """
+    if not text or "\\displaystyle" not in text:
+        return text
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        # Look for the "{\displaystyle" prefix.
+        if text[i] == "{" and text.startswith("\\displaystyle", i + 1):
+            start_inner = i + 1 + len("\\displaystyle")
+            # Skip whitespace between "\displaystyle" and content.
+            while start_inner < n and text[start_inner] in (" ", "\t", "\n"):
+                start_inner += 1
+            depth = 1
+            j = start_inner
+            while j < n and depth > 0:
+                c = text[j]
+                if c == "\\" and j + 1 < n:
+                    # Preserve escaped braces / characters verbatim.
+                    j += 2
+                    continue
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if depth == 0 and j < n:
+                # Emit the inner TeX (unwrap the {\displaystyle …} wrapper)
+                # and advance past the closing brace.
+                out.append(text[start_inner:j])
+                i = j + 1
+                continue
+            # Unmatched wrapper: fall through and emit the literal char.
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 # --------------------------------------------------------------------------- #
 # Markdown build
 # --------------------------------------------------------------------------- #
@@ -242,9 +290,14 @@ def build_markdown(page: WikiPage, today: str) -> str:
     # Re-inject LaTeX: find each math block's rendered plaintext in the extract
     # and replace with the TeX form.  Wikipedia plaintext usually drops the
     # formula or replaces with a placeholder like ``{\\displaystyle …}``.
+    # The previous regex-based stripper used ``[^}]*`` which stopped at the
+    # first ``}`` and mangled nested-brace expressions like
+    # ``{\displaystyle \|f\|_{p}}`` — the inner ``_{p}`` closed the outer
+    # group prematurely, leaving stray ``}`` and eating the TeX body.
+    # ``_strip_displaystyle`` walks the string with a brace counter so the
+    # matching outer ``}`` is always chosen.
     def _restore_math(text: str) -> str:
-        cleaned = re.sub(r"\{\\displaystyle[^}]*\}", "", text)
-        return cleaned
+        return _strip_displaystyle(text)
 
     lead = _restore_math(lead)
     body_sections = [(lvl, h, _restore_math(b)) for lvl, h, b in body_sections]

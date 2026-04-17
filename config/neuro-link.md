@@ -58,6 +58,16 @@ graph_db:
 harness_bridge:
   enabled: false
   harnesses: []
+llm_proxy:
+  # Per-token-hash rate limit (requests per rolling 60-second window).
+  rate_limit_rpm: 60
+  # Per-token-hash daily USD cap (UTC-day); cost estimated from model pricing.
+  daily_budget_usd: 50.0
+  # Model allowlist (glob patterns). Anthropic native + OpenRouter pass-through.
+  allowed_models:
+    - "claude-*"
+    - "anthropic/*"
+    - "openrouter/*"
 ---
 
 # neuro-link-recursive Master Config
@@ -87,3 +97,31 @@ The `directories` block maps logical names to filesystem paths. All paths are re
 
 Set `harness_bridge.enabled: true` and add harness configs to `harnesses[]` when ready.
 See `config/harness-harness-comms.md` for the full harness bridge configuration.
+
+## Secrets + runtime credentials
+
+All runtime credentials live in `secrets/.env` (mode 0600, gitignored). The following env vars are **required** before `docker compose up` — compose will fail-closed if any are missing:
+
+| Env var | Purpose | Auto-generated? |
+|---|---|---|
+| `NLR_API_TOKEN` | Bearer token for the HTTP API | yes, on first `neuro-link serve --token auto` |
+| `NEO4J_PASSWORD` | Neo4j graph DB password | yes, by `setup-deps.sh` on first run (32-char random) |
+
+Rotation recipes:
+- **NEO4J_PASSWORD** → see `docs/rotate-neo4j-password.md`
+- **NLR_API_TOKEN** → `neuro-link serve --token auto` regenerates + persists
+
+## LLM proxy guardrails
+
+The `/llm/v1/*` proxy (see `server/src/api/llm_proxy.rs`) enforces three per-token
+limits configured in the `llm_proxy:` frontmatter block below. Override via env
+(e.g. `NLR_LLM_RPM=120`) or edit the block directly.
+
+- `rate_limit_rpm` — requests per minute per token-hash. 429 when exceeded.
+- `daily_budget_usd` — max cumulative cost (estimated) per token-hash per UTC
+  day. 402 when exceeded. Ledger at `state/llm_quota.jsonl`.
+- `allowed_models` — allowlist for the `model` field. Glob wildcards supported
+  (`openrouter/*`, `anthropic/*`, `claude-*`). 400 on disallowed model.
+
+All three default-deny if misconfigured (zero RPM / zero budget / empty list).
+See `security-threats.md` T4 for the threat justification.

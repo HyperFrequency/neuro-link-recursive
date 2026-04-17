@@ -159,7 +159,7 @@
 
   <!-- Connection info -->
   <h2>Connect External Tools</h2>
-  <div class="grid" style="grid-template-columns: 1fr 1fr 1fr;">
+  <div class="grid" style="grid-template-columns: 1fr 1fr 1fr 1fr;">
     <div class="card">
       <h3>MCP Endpoint</h3>
       <div class="endpoint" x-text="'http://localhost:8080/mcp'"></div>
@@ -174,6 +174,18 @@
       <h3>REST API</h3>
       <div class="endpoint">http://localhost:8080/api/v1/&lt;resource&gt;</div>
       <div class="sub" style="margin-top: 0.5rem;">wiki, rag, ingest, ontology, tasks, scan, harness, state, config, hooks, services</div>
+    </div>
+    <div class="card" x-data="{ copied: false, sample: `curl -s -X POST http://localhost:8080/api/v1/rag/query \\\n  -H \"Authorization: Bearer $NLR_API_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"query\":\"rust ownership\",\"limit\":3}'` }">
+      <h3 style="display: flex; justify-content: space-between; align-items: center;">
+        <span>Example Call</span>
+        <button style="font-size: 0.7rem; padding: 0.2rem 0.5rem;"
+                @click="navigator.clipboard.writeText(sample); copied = true; setTimeout(() => copied = false, 1500)"
+                x-text="copied ? 'Copied' : 'Copy'"></button>
+      </h3>
+      <pre class="endpoint" style="white-space: pre-wrap; line-height: 1.4;">curl -s -X POST http://localhost:8080/api/v1/rag/query \
+  -H "Authorization: Bearer $NLR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"rust ownership","limit":3}'</pre>
     </div>
   </div>
 

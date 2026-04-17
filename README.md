@@ -2,9 +2,36 @@
 
 Unified context, memory & behavior control plane for AI agent harnesses.
 
-A hybrid RAG + LLM-Wiki system with a pure Rust MCP server core. Drop markdown files to define workflows, reasoning ontologies, and operational tasks — the system auto-generates skills, hooks, cron jobs, and monitors performance.
+## Contents
+
+- [Quickstart (60s)](#quickstart-60s)
+- [What It Does](#what-it-does)
+- [Architecture](#architecture) — 4 small diagrams (full set in [`docs/architecture.md`](docs/architecture.md))
+- [Quick Start (detailed)](#quick-start-detailed)
+- [Directory Layout](#directory-layout)
+- [Skills (16)](#skills-16)
+- [Hooks (5)](#hooks-5)
+- [Configuration](#configuration)
+- [`nlr` CLI](#nlr-cli)
+
+## Quickstart (60s)
+
+```bash
+# 1. Install deps + start services
+curl -fsSL https://raw.githubusercontent.com/HyperFrequency/neuro-link-recursive/master/setup-deps.sh | bash
+
+# 2. Start the runtime
+cd ~/neuro-link && nohup neuro-link start --port 8080 --tunnel > /tmp/nlr.log 2>&1 &
+
+# 3. Drop a file into the inbox
+echo "# Rust ownership" > ~/neuro-link/00-raw/hello.md
+```
+
+Wait 3 seconds, then `tail /tmp/nlr.log` — you'll see `loose drop detected` and `Classified hello -> software-engineering`.
 
 ## What It Does
+
+A hybrid RAG + LLM-Wiki system with a pure Rust MCP server core. Drop markdown files to define workflows, reasoning ontologies, and operational tasks — the system auto-generates skills, hooks, cron jobs, and monitors performance.
 
 - **LLM-Wiki** — Incrementally builds a persistent, cross-referenced wiki from raw sources (Karpathy pattern)
 - **Auto-RAG** — Injects relevant wiki context into every prompt via hooks
@@ -15,113 +42,59 @@ A hybrid RAG + LLM-Wiki system with a pure Rust MCP server core. Drop markdown f
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph "User Interface"
-        CLI[Claude Code CLI]
-        OBS[Obsidian Vault]
-        KDENSE[K-Dense BYOK]
-        FORGE[ForgeCode / Claw-Code]
-    end
+Four narrowly-scoped diagrams. See [`docs/architecture.md`](docs/architecture.md) for per-diagram explanations.
 
-    subgraph "neuro-link-recursive"
-        direction TB
-        MCP["Rust MCP Server<br/>(stdio / HTTP)"]
-        SKILLS["16 Skills<br/>(SKILL.md)"]
-        HOOKS["5 Hooks<br/>(bash)"]
-    end
-
-    subgraph "Knowledge Layers"
-        RAW["00-raw/<br/>Immutable Sources"]
-        SORT["01-sorted/<br/>Classified"]
-        WIKI["02-KB-main/<br/>LLM Wiki"]
-        ONT["03-ontology-main/<br/>Reasoning Graphs"]
-        AGENTS["04-KB-agents-workflows/"]
-    end
-
-    subgraph "Self-Improvement"
-        HITL["05-self-improvement-HITL/"]
-        RECUR["06-self-improvement-recursive/"]
-        GAPS["05-insights-gaps/"]
-        REPORTS["06-progress-reports/"]
-    end
-
-    subgraph "Infrastructure"
-        QDRANT[("Qdrant<br/>Vector DB")]
-        NEO4J[("Neo4j<br/>Graph DB")]
-        INFRA["InfraNodus<br/>MCP"]
-        C7["Context7<br/>MCP"]
-        AUGGIE["Auggie<br/>MCP"]
-        FIRE["Firecrawl<br/>MCP"]
-        TURBO["TurboVault<br/>MCP"]
-    end
-
-    CLI --> SKILLS
-    CLI --> HOOKS
-    OBS --> TURBO
-    KDENSE --> MCP
-    FORGE --> MCP
-
-    SKILLS --> WIKI
-    SKILLS --> ONT
-    SKILLS --> RAW
-    HOOKS --> WIKI
-
-    MCP --> WIKI
-    MCP --> ONT
-    MCP --> AGENTS
-    MCP --> QDRANT
-
-    WIKI --> QDRANT
-    ONT --> INFRA
-    WIKI --> NEO4J
-
-    SKILLS --> HITL
-    SKILLS --> RECUR
-    SKILLS --> GAPS
-    SKILLS --> REPORTS
-```
-
-## Data Flow
+### Drop → Classify
 
 ```mermaid
-flowchart LR
-    A[Source URL/Repo/File] --> B[crawl-ingest]
-    B --> C[00-raw/ + SHA256 dedup]
-    C --> D[01-sorted/ classify by domain]
-    D --> E[wiki-curate]
-    E --> F[02-KB-main/ wiki page]
-    F --> G[reasoning-ontology]
-    G --> H[03-ontology-main/ InfraNodus]
-    F --> I[auto-rag index]
-    I --> J[Hook: inject context on prompt]
-    H --> K[neuro-scan gap analysis]
-    K --> L[07-neuro-link-task/]
-    L --> M[job-scanner dispatch]
-    M --> B
+%%{init: {'theme':'base', 'themeVariables': {'fontFamily':'IBM Plex Mono, Menlo, Monaco, monospace', 'fontSize':'14px', 'primaryColor':'#f5f5f7', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#3b3b3b'}}}%%
+graph LR
+    DROP[Drop file] --> RAW["00-raw/<br/>SHA256 dedup"]
+    RAW --> CLASSIFY[classify-inbox]
+    CLASSIFY --> DOMAIN{domain?}
+    DOMAIN --> SORT["01-sorted/&lt;domain&gt;/"]
 ```
 
-## Self-Improvement Loop
+### Classify → Embed → Qdrant
 
 ```mermaid
-flowchart TD
-    A[Agent Session] --> B[neuro-log-tool-use hook]
-    B --> C[state/session_log.jsonl]
-    C --> D[neuro-grade]
-    D --> E[state/score_history.jsonl]
-    E --> F[self-improve-hitl]
-    F --> G{HITL Approval?}
-    G -->|Yes| H[Apply improvement]
-    G -->|No| I[Log & defer]
-    H --> J[05-self-improvement-HITL/]
-    E --> K[self-improve-recursive]
-    K --> L{Consortium Required?}
-    L -->|Yes| M[Queue for review]
-    L -->|No| N[Auto-apply]
-    N --> O[06-self-improvement-recursive/]
+%%{init: {'theme':'base', 'themeVariables': {'fontFamily':'IBM Plex Mono, Menlo, Monaco, monospace', 'fontSize':'14px', 'primaryColor':'#f5f5f7', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#3b3b3b'}}}%%
+graph LR
+    SORT["01-sorted/"] --> CHUNK[chunk]
+    CHUNK --> EMBED["embed<br/>llama-server:8400"]
+    EMBED --> QDRANT[("Qdrant<br/>nlr_wiki")]
+    CHUNK --> CURATE[wiki-curate]
+    CURATE --> WIKI["02-KB-main/"]
 ```
 
-## Quick Start
+### Query → Hybrid RAG
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'fontFamily':'IBM Plex Mono, Menlo, Monaco, monospace', 'fontSize':'14px', 'primaryColor':'#f5f5f7', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#3b3b3b'}}}%%
+graph LR
+    Q[query] --> BM25[BM25<br/>wiki md]
+    Q --> VEC[vector<br/>Qdrant]
+    Q --> EXT[InfraNodus]
+    BM25 --> RRF[RRF fuse]
+    VEC --> RRF
+    EXT --> RRF
+    RRF --> TOPK[top-k chunks]
+```
+
+### Worker Loop → HITL
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'fontFamily':'IBM Plex Mono, Menlo, Monaco, monospace', 'fontSize':'14px', 'primaryColor':'#f5f5f7', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#3b3b3b'}}}%%
+graph LR
+    LOG["session_log.jsonl"] --> GRADE[grade]
+    GRADE --> PROP["proposal.md"]
+    PROP --> HITL{HITL?}
+    HITL -->|approve| APPLY[apply + commit]
+    HITL -->|defer| PARK[park]
+    APPLY --> IMP["improvements.jsonl"]
+```
+
+## Quick Start (detailed)
 
 ```bash
 # Clone
@@ -268,6 +241,7 @@ The `job-scanner` skill processes these automatically. The `neuro-scan` skill cr
 ## Harness-to-Harness Communication
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'fontFamily':'IBM Plex Mono, Menlo, Monaco, monospace', 'fontSize':'14px', 'primaryColor':'#f5f5f7', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#3b3b3b'}}}%%
 flowchart LR
     CC[Claude Code] <-->|MCP/mcp2cli| NLR[neuro-link-recursive]
     KD[K-Dense BYOK] <-->|API| NLR

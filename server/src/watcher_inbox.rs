@@ -128,8 +128,18 @@ fn handle_event(root: &Path, event: &Event, seen: &mut HashMap<PathBuf, Instant>
             tracing::info!("quarantine drop detected: {}", path.display());
             handle_quarantine_drop(root, path)?;
         } else if parent.is_some() && parent == raw_dir {
-            tracing::info!("loose drop detected: {}", path.display());
-            handle_loose_drop(root, path)?;
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            if ext == "pdf" {
+                tracing::info!("pdf drop detected: {}", path.display());
+                handle_pdf_drop(root, path)?;
+            } else {
+                tracing::info!("loose drop detected: {}", path.display());
+                handle_loose_drop(root, path)?;
+            }
         } else if parent.is_some() && parent == task_dir {
             tracing::info!("task drop detected: {}", path.display());
             handle_task_drop(root, path)?;
@@ -145,7 +155,11 @@ fn handle_event(root: &Path, event: &Event, seen: &mut HashMap<PathBuf, Instant>
 }
 
 fn should_process(path: &Path) -> bool {
-    if path.extension().is_none_or(|ext| ext != "md") {
+    let ext = match path.extension().and_then(|s| s.to_str()) {
+        Some(e) => e.to_ascii_lowercase(),
+        None => return false,
+    };
+    if ext != "md" && ext != "pdf" {
         return false;
     }
     let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -222,6 +236,40 @@ fn handle_quarantine_drop(root: &Path, path: &Path) -> Result<()> {
                 promotion.final_path.display()
             );
         }
+    }
+    Ok(())
+}
+
+fn handle_pdf_drop(root: &Path, path: &Path) -> Result<()> {
+    // Wait for the file to stabilize — pdfs dropped via copy can fire the event
+    // before all bytes have landed. Retry until size stops changing.
+    wait_for_stable_size(path)?;
+    let outcome = crate::tools::pdf_ingest::ingest_pdf(root, path, None)?;
+    info!(
+        "Ingested PDF {} -> {} ({} pages, {} attachments)",
+        path.display(),
+        outcome.sorted_path.display(),
+        outcome.page_count,
+        outcome.attachments.len()
+    );
+    // Move the original out of the inbox so we don't re-trigger on rescans.
+    if path.starts_with(root.join("00-raw"))
+        && path.parent().map(|p| p == root.join("00-raw")).unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
+}
+
+fn wait_for_stable_size(path: &Path) -> Result<()> {
+    let mut last = 0u64;
+    for _ in 0..20 {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if size > 0 && size == last {
+            return Ok(());
+        }
+        last = size;
+        std::thread::sleep(Duration::from_millis(250));
     }
     Ok(())
 }

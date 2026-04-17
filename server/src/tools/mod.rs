@@ -2,8 +2,10 @@
 
 pub mod wiki;
 pub mod rag;
+pub mod rag_verified;
 pub mod ontology;
 pub mod ingest;
+pub mod pdf_ingest;
 pub mod tasks;
 pub mod harness;
 pub mod scan;
@@ -11,6 +13,8 @@ pub mod llm_logs;
 pub mod hooks_log;
 pub mod sessions_tools;
 pub mod traces;
+pub mod external;
+pub mod dispatcher;
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -37,8 +41,10 @@ impl ToolRegistry {
         let mut tools = Vec::new();
         tools.extend(wiki::tool_defs());
         tools.extend(rag::tool_defs());
+        tools.extend(rag_verified::tool_defs());
         tools.extend(ontology::tool_defs());
         tools.extend(ingest::tool_defs());
+        tools.extend(pdf_ingest::tool_defs());
         tools.extend(tasks::tool_defs());
         tools.extend(harness::tool_defs());
         tools.extend(scan::tool_defs());
@@ -57,8 +63,10 @@ impl ToolRegistry {
     pub fn call(&self, name: &str, args: &Value) -> Result<String> {
         match name {
             n if n.starts_with("nlr_wiki_") => wiki::call(n, args, &self.root),
+            "nlr_rag_query_verified" => rag_verified::call(name, args, &self.root),
             n if n.starts_with("nlr_rag_") => rag::call(n, args, &self.root),
             n if n.starts_with("nlr_ontology_") => ontology::call(n, args, &self.root),
+            n if n.starts_with("nlr_pdf_") => pdf_ingest::call(n, args, &self.root),
             n if n.starts_with("nlr_ingest") => ingest::call(n, args, &self.root),
             n if n.starts_with("nlr_task_") => tasks::call(n, args, &self.root),
             n if n.starts_with("nlr_harness_") => harness::call(n, args, &self.root),

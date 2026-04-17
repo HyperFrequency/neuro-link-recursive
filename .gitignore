@@ -46,3 +46,8 @@ saas/web/node_modules/
 01-sorted/**/*.md
 !01-sorted/.gitkeep
 models/
+
+# Math ingest mirrors (mirrors live sources; fetched on demand)
+state/mirrors/
+scripts/math_ingest/__pycache__/
+scripts/math_ingest/.pytest_cache/

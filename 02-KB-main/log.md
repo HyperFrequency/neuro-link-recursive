@@ -77,3 +77,7 @@ Append-only audit trail of all wiki page creates, updates, and deletions.
 ## [2026-04-17] Created: swe/sphinx-doc-build.md
 - Confidence: high
 - SHA256: 143037eb5742fbc642edb130fa83ac8c973f88379c309fb841553cad009bf17f
+
+## [2026-04-17] Created: swe/rust-channels.md
+- Confidence: high
+- SHA256: a9f310af2cf589ed1fda872e84f0033e811344e693fc48b1740efa398246af6d

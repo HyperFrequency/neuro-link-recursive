@@ -712,6 +712,25 @@ async fn run_cli(cmd: Commands) -> Result<()> {
             if !no_watch {
                 spawn_inbox_watcher(&root);
             }
+
+            // A-fu5: spawn the heartbeat daemon in-process so state/heartbeat.json
+            // stays fresh without requiring a separate `neuro-link heartbeat` process.
+            // Default cadence 60s; reads NLR_HEARTBEAT_INTERVAL env var for override.
+            {
+                let hb_root = root.clone();
+                let interval_secs: u64 = std::env::var("NLR_HEARTBEAT_INTERVAL")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(60);
+                tokio::spawn(async move {
+                    heartbeat::run_daemon(&hb_root, interval_secs).await;
+                });
+                eprintln!(
+                    "{} Heartbeat daemon spawned (interval={interval_secs}s)",
+                    "OK".green().bold()
+                );
+            }
+
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             eprintln!("{} HTTP server listening on {addr}", "OK".green().bold());
             eprintln!("  POST /mcp           — MCP JSON-RPC");

@@ -38,6 +38,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 rand = "0.9"
 futures-util = "0.3"
 notify = "6"
+flate2 = "1"
 
 [dev-dependencies]
 tempfile = "3"

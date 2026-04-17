@@ -77,6 +77,66 @@ pub fn is_path_allowed(root: &Path, rel_path: &str) -> bool {
     false
 }
 
+/// Diagnostic snapshot of how NLR_ROOT would resolve.
+///
+/// - `env`     — current `NLR_ROOT` environment variable (empty if unset)
+/// - `file`    — contents of `~/.claude/state/nlr_root` (empty if missing or unreadable)
+/// - `chosen`  — the path the resolver would actually pick, or None if none resolves
+/// - `dir_exists` — whether `chosen` is an existing directory
+/// - `mismatch`   — true if both `env` and `file` are set and differ (non-empty, non-equal)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NlrRootDiag {
+    pub env: String,
+    pub file: String,
+    pub chosen: Option<PathBuf>,
+    pub dir_exists: bool,
+    pub mismatch: bool,
+}
+
+/// Pure helper: analyze env + file-contents pair and return the diagnostic.
+///
+/// `file` is the raw content (or empty string) of `~/.claude/state/nlr_root`.
+/// Uses the same precedence as [`resolve_nlr_root`]: env wins, file is fallback.
+///
+/// The `dir_check` closure decides whether a path exists on disk; in tests this
+/// is a stub, in production callers use the wrapper [`diagnose_nlr_root`] which
+/// checks the real filesystem.
+pub fn analyze_nlr_root(env: &str, file: &str, dir_check: impl Fn(&Path) -> bool) -> NlrRootDiag {
+    let env_trim = env.trim();
+    let file_trim = file.trim();
+    let chosen: Option<PathBuf> = if !env_trim.is_empty() && dir_check(Path::new(env_trim)) {
+        Some(PathBuf::from(env_trim))
+    } else if !file_trim.is_empty() && dir_check(Path::new(file_trim)) {
+        Some(PathBuf::from(file_trim))
+    } else {
+        None
+    };
+    let dir_exists = chosen
+        .as_deref()
+        .map(|p| dir_check(p))
+        .unwrap_or(false);
+    let mismatch = !env_trim.is_empty() && !file_trim.is_empty() && env_trim != file_trim;
+    NlrRootDiag {
+        env: env_trim.to_string(),
+        file: file_trim.to_string(),
+        chosen,
+        dir_exists,
+        mismatch,
+    }
+}
+
+/// Production wrapper: reads env, reads `~/.claude/state/nlr_root`, checks
+/// directories on disk.
+pub fn diagnose_nlr_root() -> NlrRootDiag {
+    let env = std::env::var("NLR_ROOT").unwrap_or_default();
+    let file = std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".claude/state/nlr_root"))
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .unwrap_or_default();
+    analyze_nlr_root(&env, &file, |p| p.is_dir())
+}
+
 pub fn parse_frontmatter(path: &Path) -> Result<HashMap<String, String>> {
     let content = std::fs::read_to_string(path)?;
     let re = Regex::new(r"(?s)^---\n(.+?)\n---")?;
@@ -91,4 +151,61 @@ pub fn parse_frontmatter(path: &Path) -> Result<HashMap<String, String>> {
         }
     }
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analyze_env_only_resolves_when_dir_exists() {
+        let d = analyze_nlr_root("/tmp/nlr-a", "", |p| p == Path::new("/tmp/nlr-a"));
+        assert_eq!(d.env, "/tmp/nlr-a");
+        assert_eq!(d.file, "");
+        assert_eq!(d.chosen.as_deref(), Some(Path::new("/tmp/nlr-a")));
+        assert!(d.dir_exists);
+        assert!(!d.mismatch);
+    }
+
+    #[test]
+    fn analyze_file_fallback_when_env_unset() {
+        let d = analyze_nlr_root("", "/tmp/nlr-b\n", |p| p == Path::new("/tmp/nlr-b"));
+        assert_eq!(d.file, "/tmp/nlr-b");
+        assert_eq!(d.chosen.as_deref(), Some(Path::new("/tmp/nlr-b")));
+        assert!(d.dir_exists);
+        assert!(!d.mismatch);
+    }
+
+    #[test]
+    fn analyze_env_wins_when_both_set_and_valid() {
+        let dirs = |p: &Path| p == Path::new("/a") || p == Path::new("/b");
+        let d = analyze_nlr_root("/a", "/b", dirs);
+        assert_eq!(d.chosen.as_deref(), Some(Path::new("/a")));
+        assert!(d.dir_exists);
+        assert!(d.mismatch, "env and file differ => mismatch=true");
+    }
+
+    #[test]
+    fn analyze_matching_env_and_file_is_not_mismatch() {
+        let d = analyze_nlr_root("/x", "/x", |p| p == Path::new("/x"));
+        assert!(!d.mismatch);
+    }
+
+    #[test]
+    fn analyze_nothing_resolves_when_both_missing_on_disk() {
+        let d = analyze_nlr_root("/no1", "/no2", |_| false);
+        assert_eq!(d.chosen, None);
+        assert!(!d.dir_exists);
+        assert!(d.mismatch);
+    }
+
+    #[test]
+    fn analyze_empty_inputs_yield_no_resolution_no_mismatch() {
+        let d = analyze_nlr_root("", "", |_| true);
+        assert_eq!(d.env, "");
+        assert_eq!(d.file, "");
+        assert_eq!(d.chosen, None);
+        assert!(!d.dir_exists);
+        assert!(!d.mismatch);
+    }
 }

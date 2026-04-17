@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 # install-hooks.sh — register neuro-link-recursive hooks in a CLI client's config.
 #
-# Usage: ./scripts/install-hooks.sh <client>
-#   client ∈ {claude-code, cline, forge-code, claw-code, openclaw}
+# Usage: ./scripts/install-hooks.sh <client> [--link-project]
+#   client ∈ {claude-code}  (cline/forge-code/claw-code/openclaw removed)
+#
+# Options:
+#   --link-project   For claude-code only: create symlinks from
+#                    ~/.claude/hooks/<name>.sh -> <repo>/hooks/<name>.sh for
+#                    the top-level project hooks (auto-rag-inject.sh,
+#                    harness-bridge-check.sh, neuro-grade.sh,
+#                    neuro-log-tool-use.sh, neuro-task-check.sh). This is
+#                    de-shadow mode: edits in the repo propagate without a
+#                    re-copy. Default (omitting this flag) keeps the
+#                    existing per-client settings.json registration behavior.
 #
 # Behaviour:
 #   1. Validates the hook scripts exist in hooks/clients/<client>/
@@ -31,36 +41,55 @@ die() { fail "$1"; exit 1; }
 
 usage() {
   cat <<EOF
-Usage: $0 <client>
+Usage: $0 <client> [--link-project]
 
 Registers neuro-link-recursive hooks in the target client's config.
 
 Supported clients:
   claude-code   ~/.claude/settings.json
-  cline         ~/.config/cline/settings.json (or equivalent)
-  forge-code    ~/.config/forge-code/forge.yaml
-  claw-code     ~/.claw-code/settings.json (falls back to ~/.claude-variants/claw-code/settings.json)
-  openclaw      ~/.openclaw/settings.json (falls back to ~/.claude-variants/openclaw/settings.json)
+
+(Previously supported cline, forge-code, claw-code, openclaw were removed —
+see hooks/clients/README.md for the replacement pattern.)
+
+Options:
+  --link-project   (claude-code only) symlink project hooks in hooks/*.sh
+                   into ~/.claude/hooks/ so edits in-repo propagate without
+                   copying. Default behavior (no flag) is the existing
+                   settings.json registration.
 
 The script is idempotent — re-running will not duplicate hooks.
 EOF
   exit 1
 }
 
-[[ $# -eq 1 ]] || usage
+[[ $# -ge 1 ]] || usage
 CLIENT="$1"
+shift || true
+LINK_PROJECT=0
+for arg in "$@"; do
+  case "$arg" in
+    --link-project) LINK_PROJECT=1 ;;
+    *) die "Unknown option: $arg" ;;
+  esac
+done
 
 # Resolve repo root = parent of scripts/
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOOKS_DIR="${REPO_ROOT}/hooks/clients/${CLIENT}"
 
-[[ -d "$HOOKS_DIR" ]] || die "No hook scripts found for client '${CLIENT}' at ${HOOKS_DIR}"
+# --link-project only touches top-level hooks/*.sh (no per-client dir needed).
+# The per-client sanity check is deferred to the dispatch (below) so that
+# removed clients can emit a clear "client removed" error rather than a
+# "no hook scripts found" one.
+if [[ "$LINK_PROJECT" -eq 0 && "$CLIENT" == "claude-code" ]]; then
+  [[ -d "$HOOKS_DIR" ]] || die "No hook scripts found for client '${CLIENT}' at ${HOOKS_DIR}"
 
-# Check required scripts exist
-for script in pre_tool.sh post_tool.sh user_prompt.sh session_start.sh session_end.sh; do
-  [[ -f "${HOOKS_DIR}/${script}" ]] || die "Missing hook script: ${HOOKS_DIR}/${script}"
-done
+  # Check required scripts exist
+  for script in pre_tool.sh post_tool.sh user_prompt.sh session_start.sh session_end.sh; do
+    [[ -f "${HOOKS_DIR}/${script}" ]] || die "Missing hook script: ${HOOKS_DIR}/${script}"
+  done
+fi
 
 backup_file() {
   local target="$1"
@@ -256,6 +285,52 @@ print("ADDED:" + ",".join(added) if added else "NOCHANGE")
 PY
 }
 
+# === Project-hook symlinks (claude-code --link-project) ===
+# Symlinks ~/.claude/hooks/<name>.sh -> <repo>/hooks/<name>.sh for every
+# top-level *.sh file under hooks/. De-shadows the dead project hooks by
+# routing the global config's ~/.claude/hooks/ references through the repo.
+link_project_hooks() {
+  local repo_hooks="${REPO_ROOT}/hooks"
+  local target_dir="${HOME}/.claude/hooks"
+  mkdir -p "$target_dir"
+  local linked=0 skipped=0
+  for src in "${repo_hooks}"/*.sh; do
+    [[ -f "$src" ]] || continue
+    local name
+    name="$(basename "$src")"
+    local dst="${target_dir}/${name}"
+    if [[ -L "$dst" ]]; then
+      local cur
+      cur="$(readlink "$dst")"
+      if [[ "$cur" == "$src" ]]; then
+        skipped=$((skipped+1))
+        continue
+      fi
+      info "Replacing stale symlink: $dst -> $cur"
+      rm -f "$dst"
+    elif [[ -e "$dst" ]]; then
+      backup_file "$dst"
+      rm -f "$dst"
+    fi
+    ln -s "$src" "$dst"
+    ok "Linked ${name} -> ${src}"
+    linked=$((linked+1))
+  done
+  info "Project-hook symlinks: linked=${linked} unchanged=${skipped}"
+}
+
+if [[ "$LINK_PROJECT" -eq 1 ]]; then
+  if [[ "$CLIENT" != "claude-code" ]]; then
+    die "--link-project is only supported for client 'claude-code'"
+  fi
+  step "Linking project hooks from ${REPO_ROOT}/hooks/ -> ~/.claude/hooks/"
+  link_project_hooks
+  step "Done (--link-project)"
+  info "The global ~/.claude/settings.json can now reference hooks at"
+  info "~/.claude/hooks/<name>.sh and they resolve to the in-repo scripts."
+  exit 0
+fi
+
 # --- Dispatch ---
 step "Installing neuro-link-recursive hooks for: ${CLIENT}"
 
@@ -264,28 +339,8 @@ case "$CLIENT" in
     CFG="${HOME}/.claude/settings.json"
     result="$(install_claude_like "$CFG")"
     ;;
-  claw-code)
-    CFG="${HOME}/.claw-code/settings.json"
-    [[ -d "${HOME}/.claw-code" ]] || CFG="${HOME}/.claude-variants/claw-code/settings.json"
-    result="$(install_claude_like "$CFG")"
-    ;;
-  openclaw)
-    CFG="${HOME}/.openclaw/settings.json"
-    [[ -d "${HOME}/.openclaw" ]] || CFG="${HOME}/.claude-variants/openclaw/settings.json"
-    result="$(install_claude_like "$CFG")"
-    ;;
-  cline)
-    CFG="${HOME}/.config/cline/settings.json"
-    # Fall back to VS Code global storage location used by Cline
-    if [[ ! -d "$(dirname "$CFG")" ]] && [[ -d "${HOME}/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings" ]]; then
-      CFG="${HOME}/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/hooks.json"
-    fi
-    result="$(install_cline "$CFG")"
-    ;;
-  forge-code)
-    CFG="${HOME}/.config/forge-code/forge.yaml"
-    [[ -d "${HOME}/.config/forge-code" ]] || CFG="${HOME}/.forge/forge.yaml"
-    result="$(install_forge "$CFG")"
+  claw-code|openclaw|cline|forge-code)
+    die "Client '${CLIENT}' was removed — see hooks/clients/README.md. Only 'claude-code' is supported."
     ;;
   *)
     die "Unknown client '${CLIENT}'. Run '$0' without args for usage."

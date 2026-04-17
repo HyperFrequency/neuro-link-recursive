@@ -667,6 +667,15 @@ async fn run_cli(cmd: Commands) -> Result<()> {
         }
 
         Commands::Serve { port, bind, token, insecure_no_auth, tunnel, tunnel_domain, no_watch } => {
+            // Initialise tracing so watcher_inbox + other modules' info!/warn!/error! surface.
+            // Other command paths (Start/Worker/Supervise/MCP) already call this; Serve was missed.
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                )
+                .with_target(false)
+                .try_init();
             if insecure_no_auth {
                 std::env::set_var("NLR_INSECURE_NO_AUTH", "1");
                 eprintln!("{} Running WITHOUT authentication (--insecure-no-auth)", "WARN".yellow().bold());

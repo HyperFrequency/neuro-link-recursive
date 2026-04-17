@@ -155,6 +155,27 @@ mod tests {
         assert!(queue.contains(slug));
         assert!(queue.contains("software-engineering"));
     }
+
+    #[test]
+    fn classify_moves_source_and_writes_marker() {
+        let tmp = setup_root();
+        let root = tmp.path();
+        let slug = "rust-move";
+        let raw = root.join("00-raw").join(slug);
+        fs::create_dir_all(&raw).unwrap();
+        fs::write(raw.join("source.md"), "Rust ownership stuff").unwrap();
+
+        let args = json!({"slug": slug, "domain": "software-engineering"});
+        call("nlr_ingest_classify", &args, root).unwrap();
+
+        assert!(!raw.join("source.md").exists(), "source.md should be moved, not copied");
+        assert!(raw.join(".classified").exists(), ".classified marker expected");
+        assert!(root.join("01-sorted/software-engineering").join(format!("{slug}.md")).exists());
+
+        // Idempotent: second call is a no-op.
+        let out = call("nlr_ingest_classify", &args, root).unwrap();
+        assert!(out.contains("Already classified"));
+    }
 }
 
 pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
@@ -191,13 +212,30 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
         "nlr_ingest_classify" => {
             let slug = args["slug"].as_str().unwrap_or("");
             let domain = args["domain"].as_str().unwrap_or("docs");
-            let src = root.join("00-raw").join(slug).join("source.md");
-            if !src.exists() { bail!("Source not found: {slug}"); }
-            let content = fs::read_to_string(&src)?;
+            if slug.is_empty() { bail!("nlr_ingest_classify: 'slug' is required"); }
+            let raw_dir = root.join("00-raw").join(slug);
+            let src = raw_dir.join("source.md");
+            let marker = raw_dir.join(".classified");
             let dst_dir = root.join("01-sorted").join(domain);
+            let dst = dst_dir.join(format!("{slug}.md"));
+
+            // Idempotent: if already classified, don't re-process.
+            if marker.exists() && dst.exists() {
+                return Ok(format!("Already classified {slug} -> {domain}"));
+            }
+            if !src.exists() { bail!("Source not found: {slug}"); }
+
             fs::create_dir_all(&dst_dir)?;
-            fs::write(dst_dir.join(format!("{slug}.md")), &content)?;
-            Ok(format!("Classified {slug} → {domain}"))
+            // Atomic rename when on same filesystem; fall back to copy+remove for cross-fs.
+            match fs::rename(&src, &dst) {
+                Ok(()) => {}
+                Err(_) => {
+                    fs::copy(&src, &dst)?;
+                    fs::remove_file(&src)?;
+                }
+            }
+            fs::write(&marker, format!("{}\n", chrono::Utc::now().to_rfc3339()))?;
+            Ok(format!("Classified {slug} -> {domain} (moved)"))
         }
         "nlr_ingest_dedup" => {
             let content = args["content"].as_str().unwrap_or("");

@@ -409,9 +409,12 @@ mod tests {
             .unwrap();
         });
 
-        assert!(root.join("00-raw/rust-watch/source.md").exists());
+        // A-fu2: classify moves source.md into 01-sorted/, leaves a .classified marker.
+        assert!(!root.join("00-raw/rust-watch/source.md").exists());
+        assert!(root.join("00-raw/rust-watch/.classified").exists());
         assert!(root.join("01-sorted/software-engineering/rust-watch.md").exists());
-        assert!(root.join("02-KB-main/swe/rust-watch.md").exists());
+        // No 02-KB-main stub — user feedback in feedback_auto_stub_pages.md.
+        assert!(!root.join("02-KB-main/swe/rust-watch.md").exists());
     }
 
     #[test]

@@ -10,6 +10,31 @@ use tracing::{error, info, warn};
 const DEBOUNCE_WINDOW: Duration = Duration::from_secs(2);
 
 pub async fn run(root: PathBuf) -> Result<()> {
+    // Backfill: on startup, sweep tasks that were dropped while the server was
+    // down. Wait out the debounce window so any in-flight watcher events from
+    // the just-arrived tasks don't race the backfill sweep.
+    let backfill_root = root.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        match tokio::task::spawn_blocking(move || {
+            crate::tools::dispatcher::backfill_pending_tasks(
+                &backfill_root,
+                Duration::from_secs(30),
+            )
+        })
+        .await
+        {
+            Ok(Ok(dispatched)) => {
+                if !dispatched.is_empty() {
+                    info!("backfill dispatched {} pending task(s): {:?}",
+                          dispatched.len(), dispatched);
+                }
+            }
+            Ok(Err(e)) => warn!("backfill sweep failed: {e}"),
+            Err(e) => warn!("backfill join error: {e}"),
+        }
+    });
+
     tokio::task::spawn_blocking(move || blocking_run(root)).await?
 }
 
@@ -148,6 +173,8 @@ fn handle_task_drop(root: &Path, path: &Path) -> Result<()> {
         return Ok(());
     }
 
+    // Log the pickup event (preserved from pre-dispatcher behavior for continuity
+    // with any existing consumers of state/job_log.jsonl).
     let entry = json!({
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "event": "task_picked_up",
@@ -156,13 +183,60 @@ fn handle_task_drop(root: &Path, path: &Path) -> Result<()> {
         "status": status,
     });
     let state_path = root.join("state").join("job_log.jsonl");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(state_path)?;
-    use std::io::Write;
-    writeln!(file, "{}", serde_json::to_string(&entry)?)?;
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&state_path)?;
+        use std::io::Write;
+        writeln!(file, "{}", serde_json::to_string(&entry)?)?;
+    }
     info!("Logged pending task pickup: {}", path.display());
+
+    // Fan out to the dispatcher on a background tokio task so the watcher
+    // thread stays responsive even if an ingest/ontology call is slow. If
+    // there's no ambient tokio runtime (e.g. unit-test path) fall through
+    // silently — tests can assert the sync pickup-log portion only.
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        tracing::debug!("no tokio runtime in handle_task_drop; skipping dispatch");
+        return Ok(());
+    };
+    let root_buf = root.to_path_buf();
+    let path_buf = path.to_path_buf();
+    handle.spawn(async move {
+        let fname = path_buf
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let root_for_err = root_buf.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::tools::dispatcher::dispatch_task(&root_buf, &path_buf)
+        })
+        .await;
+        match result {
+            Ok(Ok(outcome)) => {
+                tracing::info!("task {fname} dispatched → {}", outcome.status);
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("task {fname} dispatch error: {e}");
+                let _ = crate::tools::dispatcher::append_job_error(
+                    &root_for_err,
+                    &fname,
+                    &format!("dispatch: {e}"),
+                );
+            }
+            Err(e) => {
+                tracing::warn!("task {fname} dispatch join error: {e}");
+                let _ = crate::tools::dispatcher::append_job_error(
+                    &root_for_err,
+                    &fname,
+                    &format!("join: {e}"),
+                );
+            }
+        }
+    });
+
     Ok(())
 }
 

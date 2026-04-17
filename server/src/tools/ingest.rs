@@ -145,8 +145,14 @@ mod tests {
 pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
     match name {
         "nlr_ingest" => {
-            let slug = args["slug"].as_str().unwrap_or("untitled");
-            let content = args["content"].as_str().unwrap_or("");
+            // Required: slug, content. Empty args previously silently recorded a
+            // duplicate of the empty-content sha256 (heavy-testing-suite surfaced).
+            let slug = args.get("slug").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_ingest: 'slug' is required (non-empty string)"))?;
+            let content = args.get("content").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_ingest: 'content' is required (non-empty string)"))?;
             let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let src_type = args.get("source_type").and_then(|v| v.as_str()).unwrap_or("manual");
             let sha = hex::encode(Sha256::digest(content.as_bytes()));

@@ -12,6 +12,7 @@ pub mod scan;
 pub mod llm_logs;
 pub mod hooks_log;
 pub mod sessions_tools;
+pub mod external;
 pub mod dispatcher;
 
 use anyhow::{bail, Result};

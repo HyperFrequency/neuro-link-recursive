@@ -10,6 +10,7 @@ pub mod scan;
 pub mod llm_logs;
 pub mod hooks_log;
 pub mod sessions_tools;
+pub mod math;
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -44,6 +45,7 @@ impl ToolRegistry {
         tools.extend(llm_logs::tool_defs());
         tools.extend(hooks_log::tool_defs());
         tools.extend(sessions_tools::tool_defs());
+        tools.extend(math::tool_defs());
         // State tools
         tools.push(json!({"name": "nlr_state_heartbeat", "description": "Read or update heartbeat status", "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "update"]}}, "required": ["action"]}}));
         tools.push(json!({"name": "nlr_state_log", "description": "Append to session log", "inputSchema": {"type": "object", "properties": {"tool": {"type": "string"}, "exit_code": {"type": "integer"}}, "required": ["tool"]}}));
@@ -64,6 +66,7 @@ impl ToolRegistry {
             n if n.starts_with("nlr_llm_logs_") => llm_logs::call(n, args, &self.root),
             n if n.starts_with("nlr_hooks_log_") => hooks_log::call(n, args, &self.root),
             n if n.starts_with("nlr_sessions_") => sessions_tools::call(n, args, &self.root),
+            n if n.starts_with("nlr_math_") => math::call(n, args, &self.root),
             "nlr_state_heartbeat" => {
                 let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("read");
                 match action {

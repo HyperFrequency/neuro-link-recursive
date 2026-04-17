@@ -261,3 +261,223 @@ Append-only audit trail of all wiki page creates, updates, and deletions.
 ## [2026-04-17] Created: quant/duration-convexity-hedging.md
 - Confidence: high
 - SHA256: d5a77ac77afb82788edcacd49236a1f4810a88ad99fb50973f3db59c9f671495
+
+## [2026-04-17] Created: math/kernel-methods-theory.md
+- Confidence: medium
+- SHA256: aae68abb15ff210f73a3d755083f4538d4003dce95460d98d4d274faffc2ba09
+
+## [2026-04-17] Created: math/shannon-entropy-cross-entropy.md
+- Confidence: medium
+- SHA256: c280dac220350761b03f7f4bbe30bcc3bd5af0bc70ff84a545212727bd27cd99
+
+## [2026-04-17] Created: math/mutual-information.md
+- Confidence: medium
+- SHA256: 1e8d1d123cf509462c4789d2eaa394e3876bfdfc8d5ac12bb4decf1ccaa54074
+
+## [2026-04-17] Created: math/kl-divergence-f-divergences.md
+- Confidence: medium
+- SHA256: 39355ee3c0c249b4bded3ce3b4329793ac909a8a64a30e78b2abfd212c09182e
+
+## [2026-04-17] Created: math/fisher-information-cramer-rao.md
+- Confidence: medium
+- SHA256: ea1f0130dfa37f3bc08529b32db9c13651fa96a2dac8600ad093844277f5688e
+
+## [2026-04-17] Created: math/rate-distortion-theory.md
+- Confidence: medium
+- SHA256: 047bb51a20fdb544fbfc072b7b2926d6512fe59153639fb69dee9aac6c395b12
+
+## [2026-04-17] Created: math/channel-capacity.md
+- Confidence: medium
+- SHA256: 4ce738f5021127b7d3f5dbcbb5348e88f2d13e32b034eff8b337073e0eb32238
+
+## [2026-04-17] Created: math/monge-kantorovich-optimal-transport.md
+- Confidence: medium
+- SHA256: 6970d2bb8769b2ab18dada33474a9f7665d882b800ab81c5011fa9e5a0e41bcd
+
+## [2026-04-17] Created: math/wasserstein-distance.md
+- Confidence: medium
+- SHA256: 2100df09feeae5ff93d915b8b5e90b7c748009e0f7c89daacc57088da9e6ec25
+
+## [2026-04-17] Created: math/sinkhorn-entropic-regularization.md
+- Confidence: medium
+- SHA256: 61e8102a12cf9374260e752a76cb8c9ee1cfc3d8fc143497d9da9d5e18f5ea6f
+
+## [2026-04-17] Created: quant/impermanent-loss.md
+- Confidence: medium
+- SHA256: 673ce564ee0b2a1992a05791f9e80d071ed121cf64d5585d50e5be719e46f9e8
+
+## [2026-04-17] Created: quant/mev-sandwich-arbitrage.md
+- Confidence: medium
+- SHA256: 3aad910aaafdc3ec43d3fbd450cd50b8c00488c3dac26dedd436c9636a01e5d7
+
+## [2026-04-17] Created: quant/orderbook-vs-amm-liquidity.md
+- Confidence: medium
+- SHA256: ecdf15cae7563fdea4671ad8cfa56ea93374542d2915990d0e3828ab31a8210b
+
+## [2026-04-17] Created: quant/hmm-regime-detection.md
+- Confidence: medium
+- SHA256: f7ca27a34127364d24d1813b099197a281d5c772ba747c159eb8c4199150cb8d
+
+## [2026-04-17] Created: quant/markov-switching-garch.md
+- Confidence: medium
+- SHA256: a37dc710b3643ea9b736029d4402b56a747e766df83775c10adbd8d634606004
+
+## [2026-04-17] Created: quant/change-point-detection.md
+- Confidence: medium
+- SHA256: f6febb35cd572e9077b9dc9e0857f355850ce8290e836162f51351dd2869bd93
+
+## [2026-04-17] Created: quant/structural-break-tests.md
+- Confidence: medium
+- SHA256: 10b8453e5ada5da11201c380fe76d59d9d503c9ea929184d2546ebc9c233edd0
+
+## [2026-04-17] Created: quant/stationarity-tests.md
+- Confidence: medium
+- SHA256: b7161206982450a9a6cf93f84278abe67e5fc3b69896609d2f06a5244ad2e110
+
+## [2026-04-17] Created: quant/backtest-overfitting-pbo.md
+- Confidence: medium
+- SHA256: 0de58a39bd9851c41cb7cacf45c5ed217139b9661675750015df04b529287f72
+
+## [2026-04-17] Created: quant/oos-sharpe-degradation.md
+- Confidence: medium
+- SHA256: 7fe493dd2b4a9be6af51e1c1f19c82c548f5008060c11ba44f397698b8f858b0
+
+## [2026-04-17] Created: ml-nn/multimodal-clip-blip-llava-flamingo.md
+- Confidence: medium
+- SHA256: 2025634dbba5c1abf8d7fd7c7ccb7c259cb8cafcef015042c9053f7ab04e11e2
+
+## [2026-04-17] Created: ml-nn/rl-q-learning-sarsa.md
+- Confidence: medium
+- SHA256: 77e49830563dfe646126a9fb668517323d0d480a55d56895bc2f3c462690db09
+
+## [2026-04-17] Created: ml-nn/dqn-double-dueling.md
+- Confidence: medium
+- SHA256: e4599311c914f40b9d11fee79324217f6f1af24e4b49536530b53273a96c524e
+
+## [2026-04-17] Created: ml-nn/policy-gradient-reinforce-a2c.md
+- Confidence: medium
+- SHA256: c3d12c1b1e84e39657597c8192d4ece8c70ac94368ded1c785d11a2407725158
+
+## [2026-04-17] Created: ml-nn/ppo-trpo-trust-regions.md
+- Confidence: medium
+- SHA256: de1a91fc39b782546390f27aa2d988011e533df948de99fd1e1c86214ef8de6a
+
+## [2026-04-17] Created: ml-nn/ddpg-td3-sac.md
+- Confidence: medium
+- SHA256: 043bab2a371919952171ef91c5e1d076124d8aa1c048be20aa5a849a146440d2
+
+## [2026-04-17] Created: ml-nn/model-based-rl-world-models.md
+- Confidence: medium
+- SHA256: 0b69952490b9c14b8619252600012e0f3b0b1f7f7f8eaf40a9d1588846605139
+
+## [2026-04-17] Created: ml-nn/alphazero-mcts-self-play.md
+- Confidence: medium
+- SHA256: 486276b9cb3e6524390787691aed382df9c816c77154585edf5f0624d3b972ba
+
+## [2026-04-17] Created: ml-nn/exploration-epsilon-ucb-thompson.md
+- Confidence: medium
+- SHA256: 57397750a9d30ce90c09757244c0da11e0be933f80a6496d8f37e3eaa4e01804
+
+## [2026-04-17] Created: ml-nn/offline-rl-cql.md
+- Confidence: medium
+- SHA256: 813d02a30152f9f9f42fb408034f6da0f5e52440c04cc08568e1b43fcd5f8179
+
+## [2026-04-17] Created: alpha-factory/space-mapping-heston-calibration.md
+- Confidence: medium
+- SHA256: 4c62c8541e91b84b832fdb6bd9f12bb22c9df8d5466670500ce4b753285799bb
+
+## [2026-04-17] Created: alpha-factory/open-finllms-multimodal.md
+- Confidence: medium
+- SHA256: 0245c681a86955123d39802cf54d69f83c2383a8833fbc1c971b3aa0db17b79a
+
+## [2026-04-17] Created: alpha-factory/activist-target-prediction.md
+- Confidence: medium
+- SHA256: c570babb4ffaf5bd2e64c6b5ed0b71471d5573eb401b75572c0984dae630cd11
+
+## [2026-04-17] Created: alpha-factory/cost-sensitive-drc-log-optimal.md
+- Confidence: medium
+- SHA256: 25d125c0884f8137fc595c8879477dd4a3aeff3dc4ebcffd46325b614d81f939
+
+## [2026-04-17] Created: alpha-factory/mean-variance-equilibria-semimartingale.md
+- Confidence: medium
+- SHA256: 94361ddeaab138ec469054f234692cd379d3b99537d06a69af638638e0430512
+
+## [2026-04-17] Created: alpha-factory/run-on-fossil-fuel-transition-risk.md
+- Confidence: medium
+- SHA256: 6ed668ac8caa958d01a377daa397b50156ab526b1b62b6d9356a6c603a2155b6
+
+## [2026-04-17] Created: alpha-factory/innovative-financing-morocco.md
+- Confidence: medium
+- SHA256: c6ca67bcc56cd2ea337c281721062868ae7b89158b69a45e182d51080b026b88
+
+## [2026-04-17] Created: alpha-factory/radner-equilibrium-population-growth.md
+- Confidence: medium
+- SHA256: 863497c4b17529ce39e8bc3ed6d9f5523a48e7c1a56c2f577427bc74e50577bc
+
+## [2026-04-17] Created: alpha-factory/llms-democratize-costly-datasets.md
+- Confidence: medium
+- SHA256: b6bd1d73ce95b28e30785fea53dfbcb8e925d869837176258ff55592039a9171
+
+## [2026-04-17] Created: alpha-factory/equilibrium-investment-preference-uncertainty.md
+- Confidence: medium
+- SHA256: 8e7213fc0f471fdcb7dfe89abee58391546c56c850d430d7b43611d3f153ecc2
+
+## [2026-04-17] Created: ml-nn/embedding-models-e5-bge-nomic.md
+- Confidence: high
+- SHA256: 6fec437c65d97892124098bdda402f6147567a02a5a97996b3c611e0b082d525
+
+## [2026-04-17] Created: ml-nn/cross-encoder-reranking-colbert.md
+- Confidence: high
+- SHA256: 3c4500b235c3af30848c3c1eed90586fb8650512f852f3aa2227a4060bf09642
+
+## [2026-04-17] Created: ml-nn/hnsw-ivf-pq-vector-indexes.md
+- Confidence: high
+- SHA256: 03bc094cb0ce9c47ee4594b2701a68982838f13bd218da485397f0e24f3342ee
+
+## [2026-04-17] Created: ml-nn/contrastive-learning-simclr-moco-dino.md
+- Confidence: high
+- SHA256: 3d1dd2f064460467ab992bbc3b02e1d2071eceac8b0f13cfa905fc874f472035
+
+## [2026-04-17] Created: ml-nn/self-supervised-pretext-tasks.md
+- Confidence: high
+- SHA256: a88f8a597395dcb0a14157b11da87741eefd813f739d6d139b5a8370e0d85e3d
+
+## [2026-04-17] Created: ml-nn/knowledge-distillation-distilbert-tinybert.md
+- Confidence: high
+- SHA256: 5ad2efd9857a4f5aa83c8cfdcced076c0c3d242c6a743d1bb3078ae02b3e6f18
+
+## [2026-04-17] Created: ml-nn/pruning-magnitude-structured-lottery-ticket.md
+- Confidence: high
+- SHA256: 7767fa103fdabfa3cd8d941ef594d00a7509320ca774a1337d04607d01783c63
+
+## [2026-04-17] Created: ml-nn/neural-architecture-search-darts.md
+- Confidence: high
+- SHA256: dff8ed976f1ce98a82884fab48200fc7fe048ae7c6de7af091361abe807b81ec
+
+## [2026-04-17] Created: ml-nn/federated-learning-fedavg-fedprox.md
+- Confidence: high
+- SHA256: 8cee5f8051e0bbbee779d25885f21373177af73a673105f0a90d9ad74eb3843d
+
+## [2026-04-17] Created: ml-nn/differential-privacy-dp-sgd.md
+- Confidence: high
+- SHA256: 9b11a29dff72d9f363867b53063a4c098dfe0391511847e60c19946994a4c145
+
+## [2026-04-17] Created: alpha-factory/clustered-network-connectedness.md
+- Confidence: medium
+- SHA256: d920da4d55cb57139fb3d23aa9b90072480d0d5382e0e601c66e85b1e3e39a4f
+
+## [2026-04-17] Created: alpha-factory/multidim-specific-relative-entropy-martingales.md
+- Confidence: medium
+- SHA256: 0a95a211d54131b5b711c72bc3919f6e4a8eecab41b32cc12397b595882ed15a
+
+## [2026-04-17] Created: alpha-factory/dl-electricity-price-virtual-bidding.md
+- Confidence: medium
+- SHA256: 61747c511001903c7a1bcbb54fe6840c50112d2036a96624851186f2734e64e3
+
+## [2026-04-17] Created: alpha-factory/portfolio-optimization-transaction-costs-recursive.md
+- Confidence: medium
+- SHA256: fd5ac6d7962d2745ce4b1142e546bb8f68243a0933f4c6ebc6efbfa21699d1f2
+
+## [2026-04-17] Created: alpha-factory/hemp-applications-review.md
+- Confidence: medium
+- SHA256: 4fc8c0e0a910c825519a2d622c6edebb04c18628525441c30b67501cb18fe477

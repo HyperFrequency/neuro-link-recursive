@@ -259,15 +259,16 @@ fn test_pdf_ingest_emits_markdown_and_attachments() {
     );
 
     // Provide a minimal PDF fixture. Real PDF parsing would live behind the
-    // tool; we only verify the output shape.
-    let fixture = root.join("fixture.pdf");
+    // tool; we only verify the output shape. Filename is significant — the
+    // tool derives the output slug from the source filename, so name it
+    // `pdf-fixture.pdf` to match the `pdf-fixture.md` assertion below.
+    let fixture = root.join("pdf-fixture.pdf");
     std::fs::write(&fixture, minimal_pdf_bytes()).unwrap();
 
     let text = client.tool_text(
         "nlr_pdf_ingest",
         Some(json!({
             "path": fixture.to_str().unwrap(),
-            "slug": "pdf-fixture",
         })),
     );
     assert!(
@@ -311,7 +312,46 @@ fn test_pdf_ingest_emits_markdown_and_attachments() {
 // like a PDF" heuristics. Full parse will fail on most extractors but the
 // file is structurally a PDF.
 fn minimal_pdf_bytes() -> Vec<u8> {
-    b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<<>>\n%%EOF\n".to_vec()
+    // Valid minimal 1-page PDF 1.4 with computed xref byte offsets so strict
+    // poppler builds accept the fixture. (Previous literal was not a parseable
+    // PDF — `pdftotext` rejected it with "Couldn't find trailer dictionary".)
+    let content_stream = b"BT\n/F1 24 Tf\n72 720 Td\n(test) Tj\nET\n";
+    let len_content = content_stream.len();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        {
+            let mut v = format!("<< /Length {len_content} >>\nstream\n").into_bytes();
+            v.extend_from_slice(content_stream);
+            v.extend_from_slice(b"endstream");
+            v
+        },
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+    let mut offsets: Vec<usize> = vec![0];
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_pos = out.len();
+    out.extend_from_slice(b"xref\n");
+    out.extend_from_slice(format!("0 {}\n", objs.len() + 1).as_bytes());
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for off in offsets.iter().skip(1) {
+        out.extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
+    }
+    out.extend_from_slice(b"trailer\n");
+    out.extend_from_slice(format!("<< /Size {} /Root 1 0 R >>\n", objs.len() + 1).as_bytes());
+    out.extend_from_slice(b"startxref\n");
+    out.extend_from_slice(format!("{}\n", xref_pos).as_bytes());
+    out.extend_from_slice(b"%%EOF\n");
+    out
 }
 
 // =========================================================================

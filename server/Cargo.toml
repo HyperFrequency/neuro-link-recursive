@@ -45,6 +45,14 @@ subtle = "2.5"
 [dev-dependencies]
 tempfile = "3"
 serde_json = "1"
+# Blocking reqwest client for the P18 docker-backed neo4j integration test
+# (wait-for-ready polling + cypher HTTP seed).
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+[features]
+# P18 — gate the docker-backed neo4j integration test. Off by default so
+# normal `cargo test` stays fast and network-free.
+docker_tests = []
 
 [profile.release]
 opt-level = 3

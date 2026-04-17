@@ -99,6 +99,9 @@ for entry in "${DOMAINS[@]}"; do
 done
 chmod +x "$SCRIPT_DIR/lib/common.sh" 2>/dev/null || true
 
+# P16 — heartbeat freshness check (non-fatal; records a test result either way)
+if [ -x "$NLR_ROOT/scripts/check-heartbeat.sh" ]; then hb_out=$("$NLR_ROOT/scripts/check-heartbeat.sh" 2>&1); hb_status=$?; if [ "$hb_status" = "0" ]; then printf '{"domain":"heartbeat","name":"freshness","status":"PASS","duration_ms":0,"details":%s}\n' "$(printf '%s' "$hb_out" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" >> "$RESULT_LOG"; else printf '{"domain":"heartbeat","name":"freshness","status":"FAIL","duration_ms":0,"details":%s}\n' "$(printf '%s' "$hb_out" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" >> "$RESULT_LOG"; fi; fi
+
 # Print banner
 banner() {
     [ "$CI_MODE" = "1" ] && return

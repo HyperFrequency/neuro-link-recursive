@@ -32,6 +32,8 @@ Interactive, LLM-guided setup for neuro-link-recursive.
 
 Run this as a conversational, step-by-step walkthrough. Ask the user questions at each step and validate before proceeding.
 
+If the user prefers a non-interactive, copy-paste path instead (harness dispatch, fresh laptop), point them at `./ONBOARDING.md` in this skill directory — it's a linear 10-step runbook covering install, secrets, first run, verification, first drop, PDF pipeline, hooks, and troubleshooting. Ported from the meta-harness `ONBOARDING.md` pattern and adapted to this runtime.
+
 ### Step 1 — Welcome & Prerequisites
 
 Display:

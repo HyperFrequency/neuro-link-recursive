@@ -155,6 +155,20 @@ printf '%s' "$input" | python3 "$_PY_SCRIPT" "$COMMS_CONFIG" "$_RESULT_FILE" 2>/
 
 if [[ -s "$_RESULT_FILE" ]]; then
   result="$(cat "$_RESULT_FILE")"
+
+  # F1: attach env snapshot so the suggested harness dispatch has reproducible
+  # context (neuro-link version, heartbeat, docker/ngrok/wiki state, MCP list).
+  _ENV_SCRIPT="${NLR_ROOT}/skills/harness-bridge/env_snapshot.py"
+  env_snap=""
+  if [[ -x "$_ENV_SCRIPT" ]] || [[ -f "$_ENV_SCRIPT" ]]; then
+    env_snap="$(python3 "$_ENV_SCRIPT" --root "$NLR_ROOT" 2>/dev/null || true)"
+  fi
+  if [[ -n "$env_snap" ]]; then
+    result="${result}
+
+env_snapshot: ${env_snap}"
+  fi
+
   cat <<EOF
 {
   "hookSpecificOutput": {

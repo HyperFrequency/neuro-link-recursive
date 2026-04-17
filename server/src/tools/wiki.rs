@@ -38,10 +38,19 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
     let kb = root.join("02-KB-main");
     match name {
         "nlr_wiki_create" => {
-            let rel = args["path"].as_str().unwrap_or("untitled.md");
-            let title = args["title"].as_str().unwrap_or("Untitled");
+            // Required args: path, title, content. Reject empty/missing — previously
+            // this silently wrote 02-KB-main/untitled.md with empty body (surfaced by
+            // heavy-testing-suite negative tests).
+            let rel = args.get("path").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_wiki_create: 'path' is required (non-empty string)"))?;
+            let title = args.get("title").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_wiki_create: 'title' is required (non-empty string)"))?;
+            let content = args.get("content").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_wiki_create: 'content' is required (non-empty string)"))?;
             let domain = args.get("domain").and_then(|v| v.as_str()).unwrap_or("general");
-            let content = args["content"].as_str().unwrap_or("");
             let confidence = args.get("confidence").and_then(|v| v.as_str()).unwrap_or("medium");
 
             let path = validate_wiki_path(&kb, rel)?;

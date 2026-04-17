@@ -11,6 +11,26 @@ command, expected output, and what to do if it fails.
 AI agent harnesses (Claude Code, Cline, K-Dense, ForgeCode...). The runtime is
 a single Rust binary (`neuro-link`, v0.2.0) plus several backing services.
 
+### Default security posture (WAVE C)
+
+All runtime services bind to **`127.0.0.1` (loopback only)** by default.
+This is the safe posture and covers the common case where the machine running
+the runtime is also the machine running Claude Code / the harness.
+
+- `neuro-link` API (`:8080`) — bearer-auth enforced; bound to `127.0.0.1`
+- Qdrant (`:6333`) — no auth in Qdrant itself, loopback-only bind covers it
+- Neo4j (`:7474`, `:7687`) — password-auth + loopback-only
+- Obsidian headless (`:8501`) — **noVNC has no auth; NEVER LAN-expose**
+- Ollama (`:11434`) — loopback by default (Ollama's own posture)
+
+If you need LAN access (e.g. headless server + remote Obsidian plugin),
+run `setup-deps.sh --expose-all` which flips bindings to `0.0.0.0` **after**
+printing a security summary and requiring explicit consent. Do **not** run
+`--expose-all` on coffee-shop / hotel / conference wifi.
+
+See `.planning/security-threats.md` for the full threat model. Public exposure
+(beyond LAN) goes through the `ngrok` tunnel, which is always bearer-authed.
+
 **Components installed:**
 
 | Component | Purpose | Default port |

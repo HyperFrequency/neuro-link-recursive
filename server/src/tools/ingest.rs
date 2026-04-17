@@ -58,6 +58,13 @@ pub fn ingest_loose_file(root: &Path, slug: &str, content: &str) -> Result<()> {
 }
 
 pub async fn auto_classify_and_curate(root: &Path, slug: &str) -> Result<()> {
+    // Classify the drop (copies 00-raw/<slug>/source.md to 01-sorted/<domain>/<slug>.md)
+    // and enqueue it for proper LLM curation — DO NOT write a 02-KB-main/ stub.
+    //
+    // Earlier versions auto-created a "TODO: needs wiki-curate skill" placeholder in
+    // 02-KB-main which polluted the real wiki with useless entries. Now the slug is
+    // recorded in state/curation_queue.jsonl; the wiki-curate skill (or a future
+    // background worker) reads that queue and produces a real page.
     let src = root.join("00-raw").join(slug).join("source.md");
     if !src.exists() {
         bail!("Source not found: {slug}");
@@ -68,16 +75,18 @@ pub async fn auto_classify_and_curate(root: &Path, slug: &str) -> Result<()> {
     let args = json!({ "slug": slug, "domain": domain });
     let _ = call("nlr_ingest_classify", &args, root)?;
 
-    let wiki_dir = root.join("02-KB-main").join(wiki_dir_for_domain(domain));
-    fs::create_dir_all(&wiki_dir)?;
-    let wiki_path = wiki_dir.join(format!("{slug}.md"));
-    if !wiki_path.exists() {
-        let now = Utc::now().format("%Y-%m-%d").to_string();
-        let page = format!(
-            "---\ntitle: {slug}\ndomain: {domain}\nconfidence: low\nlast_updated: {now}\n---\n\nTODO: Auto-created stub page from inbox watcher. Curate this topic.\n"
-        );
-        fs::write(wiki_path, page)?;
+    let queue_path = root.join("state").join("curation_queue.jsonl");
+    if let Some(parent) = queue_path.parent() {
+        fs::create_dir_all(parent)?;
     }
+    let entry = json!({
+        "ts": Utc::now().to_rfc3339(),
+        "slug": slug,
+        "domain": domain,
+        "source": src.display().to_string(),
+    });
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&queue_path)?;
+    writeln!(f, "{}", entry)?;
 
     Ok(())
 }
@@ -127,7 +136,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_classify_and_curate_creates_sorted_copy_and_stub() {
+    async fn auto_classify_and_curate_copies_to_sorted_and_enqueues_no_stub() {
         let tmp = setup_root();
         let root = tmp.path();
         let slug = "rust-ownership";
@@ -137,16 +146,49 @@ mod tests {
 
         auto_classify_and_curate(root, slug).await.unwrap();
 
+        // Sorted copy written.
         assert!(root.join("01-sorted/software-engineering").join(format!("{slug}.md")).exists());
-        assert!(root.join("02-KB-main/swe").join(format!("{slug}.md")).exists());
+        // No stub in the real wiki — user feedback: "tiny summaries were useless".
+        assert!(!root.join("02-KB-main/swe").join(format!("{slug}.md")).exists());
+        // Enqueued for proper curation instead.
+        let queue = fs::read_to_string(root.join("state/curation_queue.jsonl")).unwrap();
+        assert!(queue.contains(slug));
+        assert!(queue.contains("software-engineering"));
+    }
+
+    #[test]
+    fn classify_moves_source_and_writes_marker() {
+        let tmp = setup_root();
+        let root = tmp.path();
+        let slug = "rust-move";
+        let raw = root.join("00-raw").join(slug);
+        fs::create_dir_all(&raw).unwrap();
+        fs::write(raw.join("source.md"), "Rust ownership stuff").unwrap();
+
+        let args = json!({"slug": slug, "domain": "software-engineering"});
+        call("nlr_ingest_classify", &args, root).unwrap();
+
+        assert!(!raw.join("source.md").exists(), "source.md should be moved, not copied");
+        assert!(raw.join(".classified").exists(), ".classified marker expected");
+        assert!(root.join("01-sorted/software-engineering").join(format!("{slug}.md")).exists());
+
+        // Idempotent: second call is a no-op.
+        let out = call("nlr_ingest_classify", &args, root).unwrap();
+        assert!(out.contains("Already classified"));
     }
 }
 
 pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
     match name {
         "nlr_ingest" => {
-            let slug = args["slug"].as_str().unwrap_or("untitled");
-            let content = args["content"].as_str().unwrap_or("");
+            // Required: slug, content. Empty args previously silently recorded a
+            // duplicate of the empty-content sha256 (heavy-testing-suite surfaced).
+            let slug = args.get("slug").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_ingest: 'slug' is required (non-empty string)"))?;
+            let content = args.get("content").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("nlr_ingest: 'content' is required (non-empty string)"))?;
             let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let src_type = args.get("source_type").and_then(|v| v.as_str()).unwrap_or("manual");
             let sha = hex::encode(Sha256::digest(content.as_bytes()));
@@ -170,13 +212,30 @@ pub fn call(name: &str, args: &Value, root: &Path) -> Result<String> {
         "nlr_ingest_classify" => {
             let slug = args["slug"].as_str().unwrap_or("");
             let domain = args["domain"].as_str().unwrap_or("docs");
-            let src = root.join("00-raw").join(slug).join("source.md");
-            if !src.exists() { bail!("Source not found: {slug}"); }
-            let content = fs::read_to_string(&src)?;
+            if slug.is_empty() { bail!("nlr_ingest_classify: 'slug' is required"); }
+            let raw_dir = root.join("00-raw").join(slug);
+            let src = raw_dir.join("source.md");
+            let marker = raw_dir.join(".classified");
             let dst_dir = root.join("01-sorted").join(domain);
+            let dst = dst_dir.join(format!("{slug}.md"));
+
+            // Idempotent: if already classified, don't re-process.
+            if marker.exists() && dst.exists() {
+                return Ok(format!("Already classified {slug} -> {domain}"));
+            }
+            if !src.exists() { bail!("Source not found: {slug}"); }
+
             fs::create_dir_all(&dst_dir)?;
-            fs::write(dst_dir.join(format!("{slug}.md")), &content)?;
-            Ok(format!("Classified {slug} → {domain}"))
+            // Atomic rename when on same filesystem; fall back to copy+remove for cross-fs.
+            match fs::rename(&src, &dst) {
+                Ok(()) => {}
+                Err(_) => {
+                    fs::copy(&src, &dst)?;
+                    fs::remove_file(&src)?;
+                }
+            }
+            fs::write(&marker, format!("{}\n", chrono::Utc::now().to_rfc3339()))?;
+            Ok(format!("Classified {slug} -> {domain} (moved)"))
         }
         "nlr_ingest_dedup" => {
             let content = args["content"].as_str().unwrap_or("");

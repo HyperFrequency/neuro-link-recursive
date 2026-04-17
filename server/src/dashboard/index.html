@@ -159,7 +159,7 @@
 
   <!-- Connection info -->
   <h2>Connect External Tools</h2>
-  <div class="grid" style="grid-template-columns: 1fr 1fr;">
+  <div class="grid" style="grid-template-columns: 1fr 1fr 1fr;">
     <div class="card">
       <h3>MCP Endpoint</h3>
       <div class="endpoint" x-text="'http://localhost:8080/mcp'"></div>
@@ -169,6 +169,11 @@
       <h3>LLM Passthrough Proxy</h3>
       <div class="endpoint">http://localhost:8080/llm/v1</div>
       <div class="sub" style="margin-top: 0.5rem;">Set <span class="mono">ANTHROPIC_BASE_URL</span> or <span class="mono">OPENAI_API_BASE</span></div>
+    </div>
+    <div class="card">
+      <h3>REST API</h3>
+      <div class="endpoint">http://localhost:8080/api/v1/&lt;resource&gt;</div>
+      <div class="sub" style="margin-top: 0.5rem;">wiki, rag, ingest, ontology, tasks, scan, harness, state, config, hooks, services</div>
     </div>
   </div>
 

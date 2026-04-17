@@ -1,6 +1,6 @@
 ---
 type: code-fix
-status: pending
+status: completed
 priority: 2
 created: 2026-04-17
 depends_on: []

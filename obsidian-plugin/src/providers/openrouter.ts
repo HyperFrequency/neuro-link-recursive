@@ -248,7 +248,7 @@ export async function* streamOpenAIChunks(
   const toolCallsByIndex = new Map<number, { id?: string; name?: string; args: string }>();
   let emittedToolCallIndices = new Set<number>();
 
-  for await (const data of parseSseStream(body, signal)) {
+  for await (const data of parseSseStream(body, { signal, providerName: "openrouter" })) {
     if (data === "[DONE]") {
       // Emit any finalised tool calls that haven't been emitted (some models
       // terminate the stream without a finish_reason event).

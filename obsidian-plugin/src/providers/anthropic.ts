@@ -226,7 +226,7 @@ async function* streamAnthropic(
   }
   const blocks = new Map<number, { kind: "text" | "tool_use"; tool?: ToolBuild }>();
 
-  for await (const data of parseSseStream(body, signal)) {
+  for await (const data of parseSseStream(body, { signal, providerName: "anthropic" })) {
     let evt: AnthropicStreamEvent;
     try {
       evt = JSON.parse(data) as AnthropicStreamEvent;

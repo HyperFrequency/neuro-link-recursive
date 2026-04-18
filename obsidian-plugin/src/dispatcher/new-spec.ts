@@ -22,7 +22,7 @@
 
 import { Notice, TFile } from "obsidian";
 import type NLRPlugin from "../main";
-import type { VaultEvent } from "../mcp-subscription";
+import type { VaultEvent } from "../mcp-vault-events";
 import { LLMProviderError } from "../providers/base";
 import * as fs from "fs";
 import * as path from "path";

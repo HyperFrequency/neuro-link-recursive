@@ -9,7 +9,7 @@ import { registerCommands } from "./commands";
 import { ChatbotView, VIEW_TYPE_CHATBOT } from "./chatbot";
 import { StatsView, VIEW_TYPE_STATS } from "./stats";
 import { LLMManager } from "./providers";
-import { VaultSubscriptionClient } from "./mcp-subscription";
+import { VaultEventsClient } from "./mcp-vault-events";
 import { NewSpecDispatcher } from "./dispatcher/new-spec";
 import { execFile, ChildProcess, spawn } from "child_process";
 import { promisify } from "util";
@@ -27,10 +27,10 @@ export default class NLRPlugin extends Plugin {
   /** Single LLM manager the whole plugin shares. */
   llm!: LLMManager;
   /** Global AbortController — aborted on unload to terminate in-flight
-   *  fetches, WebSocket reconnect loops, and debounced file handlers. */
+   *  fetches, long-poll loops, and debounced file handlers. */
   private lifetime = new AbortController();
   private serverProcess: ChildProcess | null = null;
-  private subscription: VaultSubscriptionClient | null = null;
+  private subscription: VaultEventsClient | null = null;
   private dispatcher: NewSpecDispatcher | null = null;
 
   async onload(): Promise<void> {
@@ -66,7 +66,10 @@ export default class NLRPlugin extends Plugin {
     // before we tear down their owners.
     this.lifetime.abort();
     if (this.subscription) {
-      this.subscription.disconnect();
+      // Fire-and-forget: disconnect awaits the in-flight long-poll and
+      // unsubscribe. We don't block unload on it — the lifetime abort
+      // already tripped, which cancels any pending fetch within the client.
+      void this.subscription.disconnect();
       this.subscription = null;
     }
     this.dispatcher = null;
@@ -91,20 +94,31 @@ export default class NLRPlugin extends Plugin {
     // Construct dispatcher first; the subscription forwards events to it.
     this.dispatcher = new NewSpecDispatcher(this);
 
-    this.subscription = new VaultSubscriptionClient(this, async (event) => {
+    this.subscription = new VaultEventsClient(this, async (event) => {
       if (!this.dispatcher) return;
-      await this.dispatcher.handle(event);
+      // Drop the synthetic Overflow kind the HTTP client uses for
+      // bookkeeping — the dispatcher only knows the four real vault
+      // event kinds. Log the overflow so it's visible in the devtools
+      // without pulling in a new UI path.
+      if (event.kind === "Overflow") {
+        console.warn(
+          `NLR vault-events: ${event.path} (dropped=${event.droppedCount ?? 0})`
+        );
+        return;
+      }
+      this.dispatcher.handle(event);
     });
     this.subscription.connect().catch((e: unknown) => {
       const err = e as Error;
-      console.warn("NLR subscription failed to connect:", err.message);
+      console.warn("NLR vault-events failed to connect:", err.message);
     });
 
     // Cold-start catch-up: dispatch any recent files that landed in the
     // window between `onload` starting and the subscription connecting.
-    // Transport-agnostic (reads the vault directly), so it remains useful
-    // after the WebSocket-to-long-poll pivot. See PR #26 review,
-    // should-fix #9.
+    // Transport-agnostic (reads the vault directly), so it still matters
+    // under the HTTP long-poll transport — arguably more so, since the
+    // first `subscribe_vault_events` call is a full HTTP round-trip. See
+    // PR #26 review, should-fix #9.
     this.dispatcher.scanCatchUp().catch((e: unknown) => {
       const err = e as Error;
       console.warn("NLR dispatcher: cold-start scan failed:", err.message);

@@ -20,7 +20,7 @@ import { ProviderId } from "./providers/base";
 
 const execFileAsync = promisify(execFile);
 
-export const SETTINGS_SCHEMA_VERSION = 2;
+export const SETTINGS_SCHEMA_VERSION = 3;
 
 export interface DispatcherSettings {
   /** Master switch for the file-drop → task-spec pipeline. */
@@ -44,15 +44,22 @@ export const DEFAULT_DISPATCHER_SETTINGS: DispatcherSettings = {
 };
 
 export interface SubscriptionSettings {
-  /** Master switch for the WebSocket subscription client. */
+  /** Master switch for the vault-events subscription client. */
   enabled: boolean;
-  /** WebSocket URL of the TurboVault MCP server. Empty = auto-derive from apiRouterPort. */
-  wsUrl: string;
+  /**
+   * HTTP base URL of the MCP endpoint the vault-events client talks to.
+   * Empty = auto-derive from `apiRouterPort` (→ `http://localhost:<port>/mcp`).
+   *
+   * Legacy field: prior schemas called this `wsUrl` and stored
+   * `ws://.../mcp/ws`. `migrateSettings` rewrites `ws(s)://` to `http(s)://`
+   * and drops the `/ws` suffix one-shot when bumping schema v2 → v3.
+   */
+  endpointUrl: string;
 }
 
 export const DEFAULT_SUBSCRIPTION_SETTINGS: SubscriptionSettings = {
   enabled: true,
-  wsUrl: "",
+  endpointUrl: "",
 };
 
 export interface HarnessConfig {
@@ -156,10 +163,50 @@ export function migrateSettings(raw: Partial<NLRSettings>): NLRSettings {
     apiKeys: { ...(raw.apiKeys || {}) },
     llm: mergeLLMSettings(safeLlm, raw.apiKeys || {}),
     dispatcher: { ...DEFAULT_DISPATCHER_SETTINGS, ...(raw.dispatcher || {}) },
-    subscription: { ...DEFAULT_SUBSCRIPTION_SETTINGS, ...(raw.subscription || {}) },
+    subscription: migrateSubscriptionSettings(raw.subscription),
     schemaVersion: SETTINGS_SCHEMA_VERSION,
   };
   return merged;
+}
+
+/**
+ * Handle the v2 → v3 subscription rename. Old installs stored
+ * `subscription.wsUrl: "ws://localhost:8080/mcp/ws"`; the new transport
+ * reads `subscription.endpointUrl: "http://localhost:8080/mcp"`. Preserve
+ * user intent by rewriting the scheme and trimming the `/ws` suffix so
+ * the upgrade is transparent.
+ */
+function migrateSubscriptionSettings(
+  raw: Partial<SubscriptionSettings> | undefined
+): SubscriptionSettings {
+  const base: SubscriptionSettings = { ...DEFAULT_SUBSCRIPTION_SETTINGS };
+  if (!raw) return base;
+  if (typeof raw.enabled === "boolean") base.enabled = raw.enabled;
+
+  // New field wins if the user already set it.
+  if (typeof raw.endpointUrl === "string" && raw.endpointUrl.length > 0) {
+    base.endpointUrl = raw.endpointUrl;
+    return base;
+  }
+
+  // Compat path: lift the legacy `wsUrl` into `endpointUrl`, rewriting
+  // `ws(s)://` → `http(s)://` and stripping the `/ws` suffix the WS
+  // transport needed.
+  const legacy = (raw as { wsUrl?: unknown }).wsUrl;
+  if (typeof legacy === "string" && legacy.length > 0) {
+    base.endpointUrl = coerceLegacyWsUrl(legacy);
+  }
+  return base;
+}
+
+/** Exported for unit tests — see tests/settings-migration.test.ts. */
+export function coerceLegacyWsUrl(raw: string): string {
+  let url = raw.trim();
+  if (url.startsWith("ws://")) url = "http://" + url.substring(5);
+  else if (url.startsWith("wss://")) url = "https://" + url.substring(6);
+  // Trim `/mcp/ws` → `/mcp` because HTTP has no separate websocket path.
+  url = url.replace(/\/mcp\/ws(\/?)$/, "/mcp$1");
+  return url;
 }
 
 function isPlainObject(v: unknown): boolean {
@@ -452,12 +499,12 @@ export class NLRSettingTab extends PluginSettingTab {
         })
       );
 
-    containerEl.createEl("h3", { text: "MCP Subscription (TurboVault)" });
+    containerEl.createEl("h3", { text: "Vault-events subscription" });
     const s = this.plugin.settings.subscription;
 
     new Setting(containerEl)
       .setName("Enabled")
-      .setDesc("Connect to TurboVault via WebSocket at plugin load")
+      .setDesc("Long-poll the MCP endpoint at plugin load")
       .addToggle((toggle) =>
         toggle.setValue(s.enabled).onChange(async (v) => {
           s.enabled = v;
@@ -466,14 +513,14 @@ export class NLRSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("WebSocket URL")
+      .setName("MCP endpoint URL")
       .setDesc("Leave blank to auto-derive from API Router Port")
       .addText((text) =>
         text
-          .setPlaceholder(`ws://localhost:${this.plugin.settings.apiRouterPort}/mcp/ws`)
-          .setValue(s.wsUrl)
+          .setPlaceholder(`http://localhost:${this.plugin.settings.apiRouterPort}/mcp`)
+          .setValue(s.endpointUrl)
           .onChange(async (v) => {
-            s.wsUrl = v.trim();
+            s.endpointUrl = v.trim();
             await this.plugin.saveSettings();
           })
       );

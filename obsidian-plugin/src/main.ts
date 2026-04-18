@@ -8,6 +8,7 @@ import { NLRSettingTab, NLRSettings, DEFAULT_SETTINGS, migrateSettings } from ".
 import { registerCommands } from "./commands";
 import { ChatbotView, VIEW_TYPE_CHATBOT } from "./chatbot";
 import { StatsView, VIEW_TYPE_STATS } from "./stats";
+import { NeuroChatView, VIEW_TYPE_NEURO_CHAT } from "./views/chat-view";
 import { LLMManager } from "./providers";
 import { VaultEventsClient } from "./mcp-vault-events";
 import { NewSpecDispatcher } from "./dispatcher/new-spec";
@@ -42,6 +43,7 @@ export default class NLRPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE_CHATBOT, (leaf) => new ChatbotView(leaf, this));
     this.registerView(VIEW_TYPE_STATS, (leaf) => new StatsView(leaf, this));
+    this.registerView(VIEW_TYPE_NEURO_CHAT, (leaf) => new NeuroChatView(leaf, this));
 
     this.addSettingTab(new NLRSettingTab(this.app, this));
 
@@ -51,6 +53,20 @@ export default class NLRPlugin extends Plugin {
 
     this.addRibbonIcon("nlr-chart", "Neuro-Link Stats", () => {
       this.activateView(VIEW_TYPE_STATS);
+    });
+
+    this.addRibbonIcon("nlr-brain", "Neuro Chat (@neuro)", () => {
+      this.activateView(VIEW_TYPE_NEURO_CHAT);
+    });
+
+    // Chat panel toggle — Cmd/Ctrl+Shift+K.
+    this.addCommand({
+      id: "nlr-toggle-neuro-chat",
+      name: "Toggle Neuro Chat panel",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "k" }],
+      callback: () => {
+        void this.toggleNeuroChat();
+      },
     });
 
     registerCommands(this);
@@ -76,6 +92,7 @@ export default class NLRPlugin extends Plugin {
     this.stopServer();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHATBOT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_STATS);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_NEURO_CHAT);
   }
 
   /** Called from settings UI when LLM config changes to rebind the manager. */
@@ -374,6 +391,26 @@ export default class NLRPlugin extends Plugin {
       const err = e as { stderr?: string; message?: string };
       throw new Error(err.stderr || err.message || "Unknown error");
     }
+  }
+
+  /**
+   * Toggle the Neuro Chat panel. If already visible as the active leaf,
+   * detach it; otherwise reveal (creating the leaf if needed). Matches
+   * Obsidian's convention for side-panel toggle commands.
+   */
+  async toggleNeuroChat(): Promise<void> {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_NEURO_CHAT);
+    if (leaves.length > 0) {
+      const activeLeaf = this.app.workspace.activeLeaf;
+      // Detach only if the active leaf IS our chat view; otherwise focus it.
+      if (activeLeaf && leaves.includes(activeLeaf)) {
+        this.app.workspace.detachLeavesOfType(VIEW_TYPE_NEURO_CHAT);
+        return;
+      }
+      this.app.workspace.revealLeaf(leaves[0]);
+      return;
+    }
+    await this.activateView(VIEW_TYPE_NEURO_CHAT);
   }
 
   async activateView(viewType: string): Promise<void> {

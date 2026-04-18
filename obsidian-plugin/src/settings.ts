@@ -62,6 +62,26 @@ export const DEFAULT_SUBSCRIPTION_SETTINGS: SubscriptionSettings = {
   endpointUrl: "",
 };
 
+/** Settings for the right-side chat panel + @neuro agent (Phase 6/7). */
+export interface ChatPanelSettings {
+  /** Model id used for chat + agent turns. Blank = primary provider default. */
+  defaultModel: string;
+  /**
+   * Cap on in-memory transcript turns. Older turns get detached from the
+   * view (and the outgoing LLM context) once this is exceeded. Prevents
+   * long sessions from drifting into high-token prompts.
+   */
+  maxTranscriptTurns: number;
+  /** When true, auto-scroll the message list to bottom on new content. */
+  autoScroll: boolean;
+}
+
+export const DEFAULT_CHAT_PANEL_SETTINGS: ChatPanelSettings = {
+  defaultModel: "",
+  maxTranscriptTurns: 50,
+  autoScroll: true,
+};
+
 export interface HarnessConfig {
   name: string;
   type: string;
@@ -92,6 +112,7 @@ export interface NLRSettings {
   llm: LLMManagerSettings;
   dispatcher: DispatcherSettings;
   subscription: SubscriptionSettings;
+  chatPanel: ChatPanelSettings;
 }
 
 const API_KEY_DEFS: Array<{ key: string; label: string; desc: string; defaultVal?: string; test: string }> = [
@@ -131,6 +152,7 @@ export const DEFAULT_SETTINGS: NLRSettings = {
   llm: DEFAULT_LLM_SETTINGS,
   dispatcher: DEFAULT_DISPATCHER_SETTINGS,
   subscription: DEFAULT_SUBSCRIPTION_SETTINGS,
+  chatPanel: DEFAULT_CHAT_PANEL_SETTINGS,
 };
 
 /**
@@ -164,6 +186,7 @@ export function migrateSettings(raw: Partial<NLRSettings>): NLRSettings {
     llm: mergeLLMSettings(safeLlm, raw.apiKeys || {}),
     dispatcher: { ...DEFAULT_DISPATCHER_SETTINGS, ...(raw.dispatcher || {}) },
     subscription: migrateSubscriptionSettings(raw.subscription),
+    chatPanel: { ...DEFAULT_CHAT_PANEL_SETTINGS, ...(raw.chatPanel || {}) },
     schemaVersion: SETTINGS_SCHEMA_VERSION,
   };
   return merged;
@@ -338,6 +361,7 @@ export class NLRSettingTab extends PluginSettingTab {
     this.renderMcpSection(containerEl);
     this.renderLoggingSection(containerEl);
     this.renderChatbotSection(containerEl);
+    this.renderChatPanelSection(containerEl);
   }
 
   private renderLLMProvidersSection(containerEl: HTMLElement): void {
@@ -1008,6 +1032,54 @@ export class NLRSettingTab extends PluginSettingTab {
             this.plugin.settings.chatbotSystemPrompt = value;
             await this.plugin.saveSettings();
           })
+      );
+  }
+
+  private renderChatPanelSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h2", { text: "Chat Panel (@neuro)" });
+    containerEl.createEl("p", {
+      text: "Right-side panel with streaming chat + agent mode. Toggle with the ribbon icon or Cmd/Ctrl+Shift+K.",
+      cls: "setting-item-description",
+    });
+
+    const cp = this.plugin.settings.chatPanel;
+
+    new Setting(containerEl)
+      .setName("Default Model")
+      .setDesc("Model id for chat + agent turns. Leave blank to use the primary LLM provider's default.")
+      .addText((text) =>
+        text
+          .setPlaceholder("(use primary provider default)")
+          .setValue(cp.defaultModel)
+          .onChange(async (v) => {
+            cp.defaultModel = v.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Max Transcript Turns")
+      .setDesc("Oldest turns beyond this cap are detached from the view and the outgoing LLM context.")
+      .addText((text) =>
+        text
+          .setValue(String(cp.maxTranscriptTurns))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n >= 2 && n <= 500) {
+              cp.maxTranscriptTurns = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-scroll")
+      .setDesc("Automatically scroll the message list to the bottom on new content.")
+      .addToggle((toggle) =>
+        toggle.setValue(cp.autoScroll).onChange(async (v) => {
+          cp.autoScroll = v;
+          await this.plugin.saveSettings();
+        })
       );
   }
 

@@ -29,7 +29,15 @@ mock.module("obsidian", () => {
     constructor(_app: unknown, _plugin: unknown) { /* no-op */ }
   }
   class WorkspaceLeafStub {}
-  class ItemViewStub {}
+  class ItemViewStub {
+    constructor(_leaf: unknown) { /* no-op */ }
+  }
+  class ComponentStub {
+    registerEvent(): void { /* no-op */ }
+    register(): void { /* no-op */ }
+    load(): void { /* no-op */ }
+    unload(): void { /* no-op */ }
+  }
   class SettingStub {
     setName(): this { return this; }
     setDesc(): this { return this; }
@@ -42,7 +50,16 @@ mock.module("obsidian", () => {
   class TextComponentStub {}
   class ButtonComponentStub {}
   class DropdownComponentStub {}
+  class MarkdownRendererStub {
+    static render(_app: unknown, markdown: string, el: { textContent?: string }): Promise<void> {
+      // Minimal jsdom-ish stub: drop raw markdown into textContent so tests
+      // can assert content made it to the element.
+      el.textContent = markdown;
+      return Promise.resolve();
+    }
+  }
   const addIcon = (_id: string, _svg: string): void => { /* no-op */ };
+  const setIcon = (_el: unknown, _icon: string): void => { /* no-op */ };
   return {
     Notice: NoticeStub,
     TFile: TFileStub,
@@ -56,6 +73,9 @@ mock.module("obsidian", () => {
     DropdownComponent: DropdownComponentStub,
     WorkspaceLeaf: WorkspaceLeafStub,
     ItemView: ItemViewStub,
+    Component: ComponentStub,
+    MarkdownRenderer: MarkdownRendererStub,
     addIcon,
+    setIcon,
   };
 });

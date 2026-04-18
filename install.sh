@@ -405,9 +405,23 @@ mkdir -p "${HOME}/.claude/state"
 printf '%s' "${NLR_ROOT}" > "${HOME}/.claude/state/nlr_root"
 ok "NLR_ROOT persisted to ~/.claude/state/nlr_root"
 
-# -- Run init.sh (directory structure, skills, hooks) --
-info "Running neuro-link init (directory structure, skills, hooks)..."
+# -- Run init.sh (directory structure, legacy skills/hooks bootstrap) --
+info "Running neuro-link init (directory structure, legacy skill bootstrap)..."
 bash "${NLR_ROOT}/scripts/init.sh" && ok "neuro-link init complete" || warn "init.sh had errors (run manually to debug)"
+
+# -- Install skills by plain copy (no symlinks) --
+# The post-2026-04-18 skills live at .claude/skills/<name>/ in this repo.
+# install_skills.sh copies the whole directory tree into ~/.claude/skills/,
+# purging any stale symlinks from older installs. Plain copy (not symlink)
+# so the user's Claude Code install is self-contained.
+info "Installing neuro-link skills to ~/.claude/skills/ (copy, no symlinks)..."
+if [[ -x "${NLR_ROOT}/.claude/skills/neuro-link-setup/scripts/install_skills.sh" ]]; then
+  NLR_ROOT="${NLR_ROOT}" bash "${NLR_ROOT}/.claude/skills/neuro-link-setup/scripts/install_skills.sh" \
+    && ok "skills installed (10 skills copied)" \
+    || warn "skill install had errors"
+else
+  warn "install_skills.sh not found or not executable — skills must be installed manually"
+fi
 
 # ============================================================================
 step "7/9  Symlink Binary to PATH"

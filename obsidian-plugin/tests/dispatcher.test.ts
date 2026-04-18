@@ -4,12 +4,12 @@
 // Obsidian's runtime. Full e2e integration (plugin + vault + TurboVault)
 // lands in Phase 9; see the plan doc.
 //
-// The stale-content-race test at the bottom of the file mocks `obsidian`
-// at module scope so the dispatcher's use of `Notice` / `TFile` resolves
-// to stub classes during the test run. See PR #26 adversarial review,
-// blocker #3.
+// The stale-content-race tests at the bottom of the file exercise the
+// dispatcher end-to-end via the shared obsidian module mock. See PR #26
+// adversarial review, blocker #3.
 
-import { describe, expect, test, mock } from "bun:test";
+import "./_obsidian-mock";
+import { describe, expect, test } from "bun:test";
 import {
   sanitiseSlug,
   FALLBACK_PROMPT,
@@ -17,19 +17,6 @@ import {
   validateSpec,
   hashContent,
 } from "../src/dispatcher/new-spec-helpers";
-
-// Mock obsidian before importing anything that transitively imports it.
-// bun:test evaluates `mock.module` synchronously, so dynamic imports below
-// see the stubbed module.
-mock.module("obsidian", () => {
-  class TFileStub {}
-  class NoticeStub {
-    constructor(_msg: string, _timeout?: number) {
-      /* no-op stub for tests */
-    }
-  }
-  return { Notice: NoticeStub, TFile: TFileStub };
-});
 
 describe("sanitiseSlug", () => {
   test("lowercases and preserves allowed chars", () => {

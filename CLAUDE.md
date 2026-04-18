@@ -1,135 +1,135 @@
 # neuro-link-recursive
 
-Unified context, memory & behavior control plane. Hybrid RAG + LLM-Wiki system with auto-curation, reasoning ontologies, and recursive self-improvement. Pure Rust binary (`neuro-link`).
+Unified context, memory & behavior control plane. Hybrid RAG + LLM-Wiki system with auto-curation, reasoning ontologies, and recursive self-improvement. Rust binary (`neuro-link`) + TurboVault SDK + qmd sidecar.
 
-## Architecture
+## Stack
 
-Three-layer knowledge system (Karpathy LLM-Wiki pattern):
-1. **Raw sources** (`00-raw/`) -- immutable ingested material. Never modify.
-2. **Wiki** (`02-KB-main/`) -- LLM-synthesized, structured markdown. The LLM owns this layer.
-3. **Schema** (`02-KB-main/schema.md`) -- conventions for wiki page structure, citations, contradictions.
+| Layer                 | Component                                 |
+| --------------------- | ----------------------------------------- |
+| Vault interface (MCP) | **TurboVault** v1.4.0 (Rust SDK)          |
+| Public face           | TurboVault HTTP + Caddy + ngrok + bearer  |
+| Retrieval             | **qmd** (local BM25 + vector + rerank + query-expand) |
+| Embedder              | **Octen-Embedding-8B Q8_0** (4096 dim)    |
+| Reranker              | Qwen3-Reranker-0.6B                       |
+| Query expansion       | Qwen3-1.7B                                |
+| Internal orchestrator | `neuro-link` Rust server (5-way RRF)      |
+| Vector DB             | Qdrant (`nlr_wiki`, `math_symbols`, 4096d, cosine) |
+| Graph DB              | Neo4j (reasoning ontologies)              |
 
-Supporting layers:
-- `01-sorted/` -- classified raw material by domain (books, arxiv, medium, huggingface, github, docs)
-- `03-ontology-main/` -- InfraNodus reasoning ontologies per workflow, agent, and state
-- `04-KB-agents-workflows/` -- per-agent/workflow knowledge pages
-- `05-insights-gaps/` -- knowledge gap reports, contradiction logs, recommended actions
-- `06-progress-reports/` -- daily/weekly/monthly synthesis
-- `07-neuro-link-task/` -- task queue: each `.md` file is a job spec (YAML frontmatter + description)
-- `08-code-docs/` -- code documentation (extends deep-tool-wiki pattern)
-- `09-business-docs/` -- non-code documentation
-- `config/` -- all markdown config files with YAML frontmatter
-- `state/` -- runtime state (JSON/JSONL): heartbeat, scores, session logs, deviations
+## Vault file structure
 
-## CLI
+| Path                             | Purpose                                          |
+| -------------------------------- | ------------------------------------------------ |
+| `00-neuro-link/`                 | Default LLM instruction specs + task queue       |
+| `01-raw/`                        | Immutable ingested sources (SHA256-named)        |
+| `01-sorted/`                     | Classified sources (symlinks into `01-raw/`)     |
+| `02-KB-main/`                    | LLM-synthesized wiki pages (schema-enforced)     |
+| `03-Ontology-main/workflow/`     | Workflow ontologies (state, phase, goal)         |
+| `03-Ontology-main/agents/`       | Agent ontologies (by-agent, by-state, by-HITL)   |
+| `04-Agent-Memory/`               | Logs, consolidated memory, perf grades           |
+| `05-insights-HITL/`              | Human-in-the-loop review queue (daily/weekly/all)|
+| `06-Recursive/`                  | Recursive self-improvement reports               |
+| `07-self-improvement-HITL/`      | Approved improvement proposals awaiting execution|
+| `08-code-docs/my-repos/`         | User's main repos                                |
+| `08-code-docs/toolbox/`          | Adjacent (not owned) tools                       |
+| `08-code-docs/forked-up/`        | Forked repos with upstream diff tracking         |
+| `.claude/`                       | Project-level Claude Code config                 |
+| `config/`                        | YAML-frontmatter markdown config files           |
+| `state/`                         | Runtime state (JSONL, heartbeat, logs)           |
+| `secrets/`                       | `.env` + signing keys (gitignored)               |
+| `server/`                        | Rust server source                               |
+| `scripts/`                       | Ingest pipelines (Marker, MinerU, arXiv, Stacks) |
+| `obsidian-plugin/`               | Existing TypeScript plugin (ngrok + bearer auth) |
 
-The `neuro-link` binary is the single entry point for all operations:
+## MCP tool surface
 
-```bash
-neuro-link init              # Initialize directory tree, skills, hooks
-neuro-link status            # Check all components
-neuro-link config <name>     # Print a config file
-neuro-link tasks             # List task queue
-neuro-link mcp               # Run as MCP server (stdio)
-```
+Two coexisting namespaces:
 
-## MCP Server
+- `nlr_*` (internal, schema-enforced) — canonical write path for `02-KB-main/`
+- `tv_*` (public via ngrok, generic) — TurboVault's 47 tools
 
-`neuro-link` runs as an MCP server for Claude Code. Add to `~/.claude.json`:
+Wiki writes go through `nlr_wiki_*` to preserve frontmatter schema.
+Link-graph / centrality / vault-health / frontmatter-SQL / batch-execute use `tv_*`.
 
-```json
-{
-  "mcpServers": {
-    "neuro-link-recursive": {
-      "type": "stdio",
-      "command": "neuro-link",
-      "args": ["mcp"],
-      "env": {"NLR_ROOT": "/path/to/neuro-link-recursive"}
-    }
-  }
-}
-```
+## Skills
 
-## Obsidian Plugin
+Each skill has its spec in `00-neuro-link/<name>.md` and is generated into `.claude/skills/<name>/` via `/skill-creator`:
 
-The neuro-link-recursive Obsidian plugin syncs wiki pages and ontologies to your vault. Install it from the Obsidian community plugins browser or manually place it in `.obsidian/plugins/neuro-link-recursive/`. Configure the vault path in `config/neuro-link.md` frontmatter:
+| Skill                           | Spec file                          | Purpose                                                    |
+| ------------------------------- | ---------------------------------- | ---------------------------------------------------------- |
+| `/neuro-link-setup`             | `neuro-link-setup.md`              | Bootstrap (prereqs, secrets, models, MCP, hooks)           |
+| `/neuro-link`                   | `neuro-link.md`                    | Main orchestrator                                          |
+| `/recursive-self-improvement`   | `recursive-self-improvement.md`    | Consortium-graded improvement loop                         |
+| `/neuro-scan`                   | `neuro-scan.md`                    | Brain scanner (jobs, failures, gaps, stale wikis)          |
+| `/neuro-surgery`                | `neuro-surgery.md`                 | HITL repair                                                |
+| `/hyper-sleep`                  | `hyper-sleep.md`                   | Non-HITL maintenance                                       |
+| `/crawl-ingest-update`          | `crawl-ingest-update.md`           | Deep ingest (Marker + MinerU + arXiv S3 + ar5iv + Stacks)  |
+| `/main-codebase-tools`          | `main-codebase-tools.md`           | Index user's main repos (Context7 + Auggie)                |
+| `/adjacent-tools-code-docs`     | `adjacent-tools-code-docs.md`      | Toolbox wiki for third-party tools                         |
+| `/forked-repos-with-changes`    | `forked-repos-with-changes.md`     | Fork diff tracking + supplementary wikis                   |
+
+## Subagents
+
+- `@neuro` (`.claude/agents/neuro.md`) — orchestrator with restricted tool set and vault-scoped system prompt.
+
+## Hooks
+
+- `UserPromptSubmit`: `.claude/hooks/auto-rag-inject.sh` — routes between qmd (vault content) and `/docs-dual-lookup` (external library APIs)
+- `PostToolUse`: `.claude/hooks/neuro-grade.sh` — append to `04-Agent-Memory/logs.md`
+
+## Wiki page schema
+
+Every `02-KB-main/*.md` has frontmatter:
 
 ```yaml
-obsidian_vault: /path/to/your/obsidian/vault
+---
+title: ...
+domain: ...
+sources: [...]
+confidence: 0.0 .. 1.0
+last_updated: YYYY-MM-DD
+open_questions: [...]
+---
 ```
 
-Connect TurboVault MCP for vault read/write from Claude Code.
+Sections (in order): Overview (≤3 sentences) → Conceptual Model → Details → Contradictions → Open Questions → Sources.
 
-## Wiki Page Conventions
+Use `[[wikilinks]]` for InfraNodus-compatible entity linking. Use `[source:slug]` for inline citations. When sources disagree, add a Contradictions section with both positions + confidence.
 
-Read `02-KB-main/schema.md` before creating or editing any wiki page. Key rules:
-- Every page has YAML frontmatter: `title`, `domain`, `sources[]`, `confidence`, `last_updated`, `open_questions[]`
-- Sections: Overview (3 sentences max) > Conceptual Model > Details > Contradictions > Open Questions > Sources
-- Use `[[wikilinks]]` for InfraNodus-compatible entity linking
-- Use `[source:slug]` for inline citations, full refs at bottom
-- When sources disagree, add a Contradictions section with both positions + confidence levels
+## Ontology format
 
-## Ontology Format
-
-Reasoning ontologies use the InfraNodus wikilink format (see `ontology-creator` skill):
+InfraNodus wikilink format:
 ```
 [[entity1]] relation description [[entity2]] [relationCode]
 ```
-Relation codes: `[isA]`, `[partOf]`, `[hasAttribute]`, `[causedBy]`, `[relatedTo]`, `[interactsWith]`, `[requires]`, `[produces]`, `[enables]`, `[contradicts]`
+Relation codes: `[isA]`, `[partOf]`, `[hasAttribute]`, `[causedBy]`, `[relatedTo]`, `[interactsWith]`, `[requires]`, `[produces]`, `[enables]`, `[contradicts]`.
 
-Two tiers per topic:
-- High-level summary: 30-60 triples covering major concepts
-- Ultra-detailed: 200-400 triples covering everything in the wiki body
+Two tiers per topic: high-level summary (30–60 triples) + ultra-detailed (200–400 triples).
 
-## Task Queue
+## Task queue
 
-Files in `07-neuro-link-task/` are job specs. Format:
+Files in `00-neuro-link/tasks/*.md` are job specs:
 ```yaml
 ---
-type: ingest | curate | scan | repair | report | ontology
+type: ingest | curate | scan | repair | report | ontology | deep-reasoning
 status: pending | running | completed | failed
 priority: 1-5
 created: YYYY-MM-DD
 depends_on: []
 assigned_harness: claude-code
+source: neuro-scan | user | hyper-sleep | recursive-self-improvement
 ---
-# Job description
 ```
-The `job-scanner` skill processes pending tasks sorted by priority.
-
-## Config Files
-
-All at `config/`. Each has YAML frontmatter (machine-readable settings) + markdown body (human context).
-Master config: `config/neuro-link.md`. Read it first.
-
-## MCP Integrations
-
-Auto-RAG queries these MCP servers based on context:
-- **InfraNodus** (`mcporter`) -- knowledge graphs, gap analysis, ontology queries
-- **TurboVault** (`turbovault`) -- Obsidian vault search, link analysis, batch updates
-- **Context7** (`mcp__context7__*`) -- upstream code docs and API signatures
-- **Auggie** (`mcp__auggie__*`) -- cross-framework semantic search
-- **Firecrawl** (`firecrawl`) -- web scraping for crawl-ingest pipeline
-
-## Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `neuro-link` | Main orchestrator: status, scan, ingest, curate |
-| `neuro-scan` | Brain scanner: pending tasks, stale pages, gaps, failures |
-| `wiki-curate` | Karpathy synthesis: raw > wiki page with citations + contradictions |
-| `crawl-ingest` | Source ingestion: URL/repo/file > 00-raw/ with SHA256 dedup |
-| `auto-rag` | Context injection per prompt via hook or manual preview |
-| `job-scanner` | Task queue processor for 07-neuro-link-task/ |
-| `reasoning-ontology` | Generate/update InfraNodus reasoning ontologies |
-| `neuro-link-setup` | Interactive guided setup |
+`/job-scanner` processes pending tasks sorted by priority.
 
 ## Rules
 
-- Never modify files in `00-raw/` -- they are immutable source material
-- Always append to `02-KB-main/log.md` when creating or updating wiki pages
-- Always regenerate `02-KB-main/index.md` after wiki mutations
-- Task files in `07-neuro-link-task/` must have their `status` frontmatter updated on completion/failure
-- State files in `state/` are JSONL (append-only) except `heartbeat.json` (overwritten)
-- Secrets in `secrets/.env` are .gitignored -- never read or display API keys
-- HITL: destructive wiki edits require user confirmation per `config/neuro-surgery.md` rules
+- Never modify files in `01-raw/` — immutable.
+- Never write to `02-KB-main/` except via `nlr_wiki_*` or `/wiki-curate`.
+- Never write to `03-Ontology-main/` except via `/reasoning-ontology`.
+- Ontology edits require HITL approval (queue to `05-insights-HITL/`).
+- Auto-synthesis capped at `confidence: 0.6`; higher needs HITL.
+- Append, never rewrite, `04-Agent-Memory/logs.md`.
+- `state/heartbeat.json` is the only file in `state/` that gets overwritten.
+- Secrets in `secrets/.env` are gitignored — never read or display.
+- Public ngrok exposure of TurboVault MUST go through the Caddy auth proxy.

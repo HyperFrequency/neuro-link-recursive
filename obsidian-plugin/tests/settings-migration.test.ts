@@ -93,11 +93,11 @@ describe("syncLegacyApiKeys", () => {
 //   (c) v2 untouched: migration is idempotent
 //   (d) corrupted llm (non-object): recovers to defaults without throwing
 describe("migrateSettings", () => {
-  test("(a) fresh install initialises schemaVersion=2 with empty llm keys", async () => {
+  test("(a) fresh install initialises schemaVersion=3 with empty llm keys", async () => {
     const { migrateSettings, SETTINGS_SCHEMA_VERSION } = await import("../src/settings");
     const s = migrateSettings({});
     expect(s.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION);
-    expect(s.schemaVersion).toBe(2);
+    expect(s.schemaVersion).toBe(3);
     // Each provider gets its default block with an empty apiKey.
     expect(s.llm.providers.openrouter.apiKey).toBe("");
     expect(s.llm.providers.anthropic.apiKey).toBe("");
@@ -121,7 +121,7 @@ describe("migrateSettings", () => {
     // Legacy keys still present (back-compat for one release per settings.ts:131-133 note).
     expect(s.apiKeys.OPENROUTER_API_KEY).toBe("sk-or-legacy");
     expect(s.apiKeys.ANTHROPIC_API_KEY).toBe("sk-ant-legacy");
-    expect(s.schemaVersion).toBe(2);
+    expect(s.schemaVersion).toBe(3);
   });
 
   test("(c) v2 install round-trips unchanged (idempotent)", async () => {
@@ -166,5 +166,62 @@ describe("migrateSettings", () => {
     });
     expect(s.llm.providers.openrouter.apiKey).toBe("");
     expect(s.llm.providers.anthropic.apiKey).toBe("");
+  });
+});
+
+// ── Subscription rename: v2 (`wsUrl`) → v3 (`endpointUrl`) ────────────
+describe("migrateSettings (subscription rename)", () => {
+  test("lifts legacy wsUrl into endpointUrl, rewriting ws:// → http://", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    // Simulate a v2 blob on disk.
+    const raw = {
+      subscription: { enabled: true, wsUrl: "ws://localhost:8080/mcp/ws" },
+    } as never;
+    const s = migrateSettings(raw);
+    expect(s.subscription.endpointUrl).toBe("http://localhost:8080/mcp");
+    expect(s.subscription.enabled).toBe(true);
+  });
+
+  test("rewrites wss:// → https:// for remote installs", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    const raw = {
+      subscription: { enabled: true, wsUrl: "wss://vault.example.com/mcp/ws" },
+    } as never;
+    const s = migrateSettings(raw);
+    expect(s.subscription.endpointUrl).toBe("https://vault.example.com/mcp");
+  });
+
+  test("preserves existing endpointUrl over legacy wsUrl", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    // User set both (maybe during a manual upgrade) — the new field wins.
+    const raw = {
+      subscription: {
+        enabled: true,
+        endpointUrl: "http://10.0.0.5:8080/mcp",
+        wsUrl: "ws://localhost:8080/mcp/ws",
+      },
+    } as never;
+    const s = migrateSettings(raw);
+    expect(s.subscription.endpointUrl).toBe("http://10.0.0.5:8080/mcp");
+  });
+
+  test("leaves endpointUrl empty when neither field is set", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    const s = migrateSettings({});
+    expect(s.subscription.endpointUrl).toBe("");
+  });
+
+  test("coerceLegacyWsUrl: pure helper covers edge cases", async () => {
+    const { coerceLegacyWsUrl } = await import("../src/settings");
+    expect(coerceLegacyWsUrl("  ws://localhost:8080/mcp/ws  ")).toBe(
+      "http://localhost:8080/mcp"
+    );
+    expect(coerceLegacyWsUrl("http://already-http/mcp")).toBe(
+      "http://already-http/mcp"
+    );
+    // Non-/mcp paths pass through with just the scheme rewrite.
+    expect(coerceLegacyWsUrl("ws://host/other/path")).toBe(
+      "http://host/other/path"
+    );
   });
 });

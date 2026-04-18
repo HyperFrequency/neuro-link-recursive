@@ -201,7 +201,7 @@ function buildClient(opts: {
       nlrRoot: "",
       subscription: {
         enabled: true,
-        wsUrl: opts.endpointUrl ?? "http://localhost:8080/mcp",
+        endpointUrl: opts.endpointUrl ?? "http://localhost:8080/mcp",
       },
       dispatcher: {
         watchGlob: opts.dispatcherGlob ?? "00-neuro-link/*.md",
@@ -632,7 +632,7 @@ interface PluginStub {
   settings: {
     apiRouterPort: number;
     nlrRoot: string;
-    subscription: { enabled: boolean; wsUrl?: string; endpointUrl?: string };
+    subscription: { enabled: boolean; endpointUrl: string };
     dispatcher: { watchGlob: string };
   };
   lifetimeSignal: AbortSignal;

@@ -419,12 +419,11 @@ export class VaultEventsClient {
   }
 
   private resolveEndpointUrl(): string {
-    // Settings still call the field `wsUrl` in commit 1 — the rename to
-    // `endpointUrl` lands in the wire-up commit together with the
-    // `ws://` → `http://` compat shim. For now, accept whatever's there
-    // and let `coerceToHttpUrl` normalise the scheme.
-    const configured = (this.plugin.settings.subscription as { wsUrl?: string; endpointUrl?: string })
-      .endpointUrl ?? this.plugin.settings.subscription.wsUrl ?? "";
+    // `migrateSettings` handles the `wsUrl` → `endpointUrl` rename and
+    // the `ws(s)://` → `http(s)://` rewrite. `coerceToHttpUrl` is
+    // belt-and-braces for users who hand-edit the data.json between
+    // releases and skip the migration path.
+    const configured = this.plugin.settings.subscription.endpointUrl;
     if (configured) return coerceToHttpUrl(configured);
     const port = this.plugin.settings.apiRouterPort || 8080;
     return `http://localhost:${port}/mcp`;

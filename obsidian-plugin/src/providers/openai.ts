@@ -37,9 +37,13 @@ class OpenAIProvider implements LLMProvider {
   }
 
   async chat(options: LLMChatOptions): Promise<LLMChatResult> {
-    const { response, signal } = await this.post(options, false);
-    const json = (await response.json()) as OpenAIChatResponse;
-    return normaliseResponse(json, signal);
+    const { response, signal, cleanup } = await this.post(options, false);
+    try {
+      const json = (await response.json()) as OpenAIChatResponse;
+      return normaliseResponse(json, signal);
+    } finally {
+      cleanup();
+    }
   }
 
   async tool_use(options: LLMChatOptions): Promise<LLMChatResult> {
@@ -47,17 +51,18 @@ class OpenAIProvider implements LLMProvider {
   }
 
   async *chatStream(options: LLMChatOptions): AsyncIterable<LLMStreamChunk> {
-    const { response, signal } = await this.post(options, true);
+    const { response, signal, cleanup } = await this.post(options, true);
     if (!response.body) {
+      cleanup();
       throw new LLMProviderError("openai", "server_error", "Streaming response has no body");
     }
-    yield* streamOpenAIChunks(response.body, signal);
+    yield* streamOpenAIChunks(response.body, signal, cleanup);
   }
 
   private async post(
     options: LLMChatOptions,
     stream: boolean
-  ): Promise<{ response: Response; signal: AbortSignal | undefined }> {
+  ): Promise<{ response: Response; signal: AbortSignal | undefined; cleanup: () => void }> {
     return fetchWithTimeout(
       "openai",
       `${this.baseUrl}/chat/completions`,

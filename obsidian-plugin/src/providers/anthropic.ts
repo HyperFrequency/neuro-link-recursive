@@ -37,9 +37,13 @@ class AnthropicProvider implements LLMProvider {
   }
 
   async chat(options: LLMChatOptions): Promise<LLMChatResult> {
-    const { response } = await this.post(options, false);
-    const json = (await response.json()) as AnthropicMessageResponse;
-    return normaliseAnthropic(json);
+    const { response, cleanup } = await this.post(options, false);
+    try {
+      const json = (await response.json()) as AnthropicMessageResponse;
+      return normaliseAnthropic(json);
+    } finally {
+      cleanup();
+    }
   }
 
   async tool_use(options: LLMChatOptions): Promise<LLMChatResult> {
@@ -47,17 +51,18 @@ class AnthropicProvider implements LLMProvider {
   }
 
   async *chatStream(options: LLMChatOptions): AsyncIterable<LLMStreamChunk> {
-    const { response, signal } = await this.post(options, true);
+    const { response, signal, cleanup } = await this.post(options, true);
     if (!response.body) {
+      cleanup();
       throw new LLMProviderError("anthropic", "server_error", "Streaming response has no body");
     }
-    yield* streamAnthropic(response.body, signal);
+    yield* streamAnthropic(response.body, signal, cleanup);
   }
 
   private async post(
     options: LLMChatOptions,
     stream: boolean
-  ): Promise<{ response: Response; signal: AbortSignal | undefined }> {
+  ): Promise<{ response: Response; signal: AbortSignal | undefined; cleanup: () => void }> {
     const { system, messages } = splitSystemAndTurns(options.messages);
     const body: Record<string, unknown> = {
       model: options.model,
@@ -109,7 +114,7 @@ class AnthropicProvider implements LLMProvider {
         { status: response.status }
       );
     }
-    return { response, signal: combinedSignal };
+    return { response, signal: combinedSignal, cleanup };
   }
 }
 
@@ -210,9 +215,10 @@ function mapStopReason(r?: string): LLMChatResult["finishReason"] {
   }
 }
 
-async function* streamAnthropic(
+export async function* streamAnthropic(
   body: ReadableStream<Uint8Array>,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  cleanup?: () => void
 ): AsyncIterable<LLMStreamChunk> {
   // Anthropic streaming: events like content_block_start, content_block_delta,
   // content_block_stop, message_delta, message_stop. Each event has `type`
@@ -226,65 +232,72 @@ async function* streamAnthropic(
   }
   const blocks = new Map<number, { kind: "text" | "tool_use"; tool?: ToolBuild }>();
 
-  for await (const data of parseSseStream(body, signal)) {
-    let evt: AnthropicStreamEvent;
-    try {
-      evt = JSON.parse(data) as AnthropicStreamEvent;
-    } catch {
-      continue;
-    }
+  try {
+    for await (const data of parseSseStream(body, { signal, providerName: "anthropic" })) {
+      let evt: AnthropicStreamEvent;
+      try {
+        evt = JSON.parse(data) as AnthropicStreamEvent;
+      } catch {
+        continue;
+      }
 
-    if (evt.type === "content_block_start") {
-      const idx = evt.index ?? 0;
-      const block = evt.content_block;
-      if (!block) continue;
-      if (block.type === "text") {
-        blocks.set(idx, { kind: "text" });
-      } else if (block.type === "tool_use") {
-        blocks.set(idx, {
-          kind: "tool_use",
-          tool: { id: block.id, name: block.name, input: "" },
-        });
-      }
-    } else if (evt.type === "content_block_delta") {
-      const idx = evt.index ?? 0;
-      const delta = evt.delta;
-      if (!delta) continue;
-      const entry = blocks.get(idx);
-      if (!entry) continue;
-      if (entry.kind === "text" && delta.type === "text_delta" && delta.text) {
-        yield { contentDelta: delta.text };
-      } else if (entry.kind === "tool_use" && delta.type === "input_json_delta" && delta.partial_json) {
-        entry.tool!.input += delta.partial_json;
-      }
-    } else if (evt.type === "content_block_stop") {
-      const idx = evt.index ?? 0;
-      const entry = blocks.get(idx);
-      if (entry?.kind === "tool_use" && entry.tool?.id && entry.tool?.name) {
-        yield {
-          toolCall: {
-            id: entry.tool.id,
-            name: entry.tool.name,
-            arguments: entry.tool.input || "{}",
-          },
-        };
-      }
-    } else if (evt.type === "message_delta") {
-      // contains stop_reason + usage
-      if (evt.delta?.stop_reason || evt.usage) {
-        yield {
-          done: true,
-          finishReason: mapStopReason(evt.delta?.stop_reason),
-          usage: evt.usage
-            ? { inputTokens: evt.usage.input_tokens, outputTokens: evt.usage.output_tokens }
-            : undefined,
-        };
+      if (evt.type === "content_block_start") {
+        const idx = evt.index ?? 0;
+        const block = evt.content_block;
+        if (!block) continue;
+        if (block.type === "text") {
+          blocks.set(idx, { kind: "text" });
+        } else if (block.type === "tool_use") {
+          blocks.set(idx, {
+            kind: "tool_use",
+            tool: { id: block.id, name: block.name, input: "" },
+          });
+        }
+      } else if (evt.type === "content_block_delta") {
+        const idx = evt.index ?? 0;
+        const delta = evt.delta;
+        if (!delta) continue;
+        const entry = blocks.get(idx);
+        if (!entry) continue;
+        if (entry.kind === "text" && delta.type === "text_delta" && delta.text) {
+          yield { contentDelta: delta.text };
+        } else if (entry.kind === "tool_use" && delta.type === "input_json_delta" && delta.partial_json) {
+          entry.tool!.input += delta.partial_json;
+        }
+      } else if (evt.type === "content_block_stop") {
+        const idx = evt.index ?? 0;
+        const entry = blocks.get(idx);
+        if (entry?.kind === "tool_use" && entry.tool?.id && entry.tool?.name) {
+          yield {
+            toolCall: {
+              id: entry.tool.id,
+              name: entry.tool.name,
+              arguments: entry.tool.input || "{}",
+            },
+          };
+        }
+      } else if (evt.type === "message_delta") {
+        // contains stop_reason + usage
+        if (evt.delta?.stop_reason || evt.usage) {
+          yield {
+            done: true,
+            finishReason: mapStopReason(evt.delta?.stop_reason),
+            usage: evt.usage
+              ? { inputTokens: evt.usage.input_tokens, outputTokens: evt.usage.output_tokens }
+              : undefined,
+          };
+          return;
+        }
+      } else if (evt.type === "message_stop") {
+        yield { done: true };
         return;
       }
-    } else if (evt.type === "message_stop") {
-      yield { done: true };
-      return;
     }
+  } finally {
+    // Clears the combineSignals timeout timer and detaches the abort-signal
+    // listener — even if the consumer breaks out of the for-await early, or
+    // the server drops mid-stream. See PR #26 review, should-fix #10.
+    if (cleanup) cleanup();
   }
 }
 

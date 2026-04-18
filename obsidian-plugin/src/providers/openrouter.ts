@@ -38,9 +38,13 @@ class OpenRouterProvider implements LLMProvider {
   }
 
   async chat(options: LLMChatOptions): Promise<LLMChatResult> {
-    const { response, signal } = await this.post(options, false);
-    const json = (await response.json()) as OpenAIChatResponse;
-    return normaliseResponse(json, signal);
+    const { response, signal, cleanup } = await this.post(options, false);
+    try {
+      const json = (await response.json()) as OpenAIChatResponse;
+      return normaliseResponse(json, signal);
+    } finally {
+      cleanup();
+    }
   }
 
   async tool_use(options: LLMChatOptions): Promise<LLMChatResult> {
@@ -49,17 +53,18 @@ class OpenRouterProvider implements LLMProvider {
   }
 
   async *chatStream(options: LLMChatOptions): AsyncIterable<LLMStreamChunk> {
-    const { response, signal } = await this.post(options, true);
+    const { response, signal, cleanup } = await this.post(options, true);
     if (!response.body) {
+      cleanup();
       throw new LLMProviderError("openrouter", "server_error", "Streaming response has no body");
     }
-    yield* streamOpenAIChunks(response.body, signal);
+    yield* streamOpenAIChunks(response.body, signal, cleanup);
   }
 
   private async post(
     options: LLMChatOptions,
     stream: boolean
-  ): Promise<{ response: Response; signal: AbortSignal | undefined }> {
+  ): Promise<{ response: Response; signal: AbortSignal | undefined; cleanup: () => void }> {
     const body = buildOpenAIBody(options, stream);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
@@ -174,7 +179,7 @@ export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   options: LLMChatOptions
-): Promise<{ response: Response; signal: AbortSignal | undefined }> {
+): Promise<{ response: Response; signal: AbortSignal | undefined; cleanup: () => void }> {
   const { combinedSignal, cleanup } = combineSignals(options.signal, options.timeoutMs);
   let response: Response;
   try {
@@ -190,9 +195,11 @@ export async function fetchWithTimeout(
       status: response.status,
     });
   }
-  // Cleanup happens when the stream is fully consumed — SSE cases rely on upstream
-  // reader cancellation to propagate aborts.
-  return { response, signal: combinedSignal };
+  // Caller must invoke cleanup: `chat()` wraps the json() read in try/finally;
+  // stream iterators accept cleanup as a third parameter and call it in the
+  // finally block that runs on EOF, error, or consumer-side .return().
+  // See PR #26 adversarial review, should-fix #10.
+  return { response, signal: combinedSignal, cleanup };
 }
 
 function combineSignals(
@@ -242,66 +249,73 @@ function wrapFetchError(provider: string, e: unknown): LLMProviderError {
 
 export async function* streamOpenAIChunks(
   body: ReadableStream<Uint8Array>,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  cleanup?: () => void
 ): AsyncIterable<LLMStreamChunk> {
   // Reconstruct per-index tool calls across deltas.
   const toolCallsByIndex = new Map<number, { id?: string; name?: string; args: string }>();
   let emittedToolCallIndices = new Set<number>();
 
-  for await (const data of parseSseStream(body, signal)) {
-    if (data === "[DONE]") {
-      // Emit any finalised tool calls that haven't been emitted (some models
-      // terminate the stream without a finish_reason event).
-      for (const [idx, call] of toolCallsByIndex.entries()) {
-        if (!emittedToolCallIndices.has(idx) && call.id && call.name) {
-          yield { toolCall: { id: call.id, name: call.name, arguments: call.args || "{}" } };
+  try {
+    for await (const data of parseSseStream(body, { signal, providerName: "openrouter" })) {
+      if (data === "[DONE]") {
+        // Emit any finalised tool calls that haven't been emitted (some models
+        // terminate the stream without a finish_reason event).
+        for (const [idx, call] of toolCallsByIndex.entries()) {
+          if (!emittedToolCallIndices.has(idx) && call.id && call.name) {
+            yield { toolCall: { id: call.id, name: call.name, arguments: call.args || "{}" } };
+          }
+        }
+        yield { done: true };
+        return;
+      }
+      let parsed: OpenAIStreamChunk;
+      try {
+        parsed = JSON.parse(data) as OpenAIStreamChunk;
+      } catch {
+        continue; // skip malformed chunks
+      }
+      const choice = parsed.choices?.[0];
+      if (!choice) continue;
+      const delta = choice.delta || {};
+      if (typeof delta.content === "string" && delta.content.length > 0) {
+        yield { contentDelta: delta.content };
+      }
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          let entry = toolCallsByIndex.get(idx);
+          if (!entry) {
+            entry = { args: "" };
+            toolCallsByIndex.set(idx, entry);
+          }
+          if (tc.id) entry.id = tc.id;
+          if (tc.function?.name) entry.name = tc.function.name;
+          if (tc.function?.arguments) entry.args += tc.function.arguments;
         }
       }
-      yield { done: true };
-      return;
-    }
-    let parsed: OpenAIStreamChunk;
-    try {
-      parsed = JSON.parse(data) as OpenAIStreamChunk;
-    } catch {
-      continue; // skip malformed chunks
-    }
-    const choice = parsed.choices?.[0];
-    if (!choice) continue;
-    const delta = choice.delta || {};
-    if (typeof delta.content === "string" && delta.content.length > 0) {
-      yield { contentDelta: delta.content };
-    }
-    if (delta.tool_calls) {
-      for (const tc of delta.tool_calls) {
-        const idx = tc.index ?? 0;
-        let entry = toolCallsByIndex.get(idx);
-        if (!entry) {
-          entry = { args: "" };
-          toolCallsByIndex.set(idx, entry);
+      if (choice.finish_reason) {
+        // Flush finalised tool calls before the terminal chunk.
+        for (const [idx, call] of toolCallsByIndex.entries()) {
+          if (!emittedToolCallIndices.has(idx) && call.id && call.name) {
+            yield { toolCall: { id: call.id, name: call.name, arguments: call.args || "{}" } };
+            emittedToolCallIndices.add(idx);
+          }
         }
-        if (tc.id) entry.id = tc.id;
-        if (tc.function?.name) entry.name = tc.function.name;
-        if (tc.function?.arguments) entry.args += tc.function.arguments;
+        yield {
+          done: true,
+          finishReason: mapFinishReason(choice.finish_reason),
+          usage: parsed.usage
+            ? { inputTokens: parsed.usage.prompt_tokens, outputTokens: parsed.usage.completion_tokens }
+            : undefined,
+        };
+        return;
       }
     }
-    if (choice.finish_reason) {
-      // Flush finalised tool calls before the terminal chunk.
-      for (const [idx, call] of toolCallsByIndex.entries()) {
-        if (!emittedToolCallIndices.has(idx) && call.id && call.name) {
-          yield { toolCall: { id: call.id, name: call.name, arguments: call.args || "{}" } };
-          emittedToolCallIndices.add(idx);
-        }
-      }
-      yield {
-        done: true,
-        finishReason: mapFinishReason(choice.finish_reason),
-        usage: parsed.usage
-          ? { inputTokens: parsed.usage.prompt_tokens, outputTokens: parsed.usage.completion_tokens }
-          : undefined,
-      };
-      return;
-    }
+  } finally {
+    // Fires on EOF, thrown errors, and consumer-side .return()/.throw() —
+    // closes the timeout timer and detaches the abort-signal listener.
+    if (cleanup) cleanup();
   }
 }
 

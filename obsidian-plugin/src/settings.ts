@@ -127,6 +127,18 @@ export const DEFAULT_SETTINGS: NLRSettings = {
 };
 
 /**
+ * Canonical mapping from legacy env-style key names (what lives in
+ * `settings.apiKeys` and `secrets/.env`) to the provider id in the new
+ * `llm.providers.*` schema. Used by both `mergeLLMSettings` (migration
+ * path) and `syncLegacyApiKeys` (runtime propagation after loadSecretsEnv).
+ */
+const LEGACY_KEY_TO_PROVIDER: Array<{ env: string; provider: ProviderId }> = [
+  { env: "OPENROUTER_API_KEY", provider: "openrouter" },
+  { env: "ANTHROPIC_API_KEY", provider: "anthropic" },
+  { env: "OPENAI_API_KEY", provider: "openai" },
+];
+
+/**
  * Migrates settings loaded from disk to the current schema. Preserves old
  * top-level keys (OPENROUTER_API_KEY, ANTHROPIC_API_KEY) as fallbacks for
  * the new `llm.providers` config when a user upgrades without reconfiguring.
@@ -134,16 +146,24 @@ export const DEFAULT_SETTINGS: NLRSettings = {
  * Called from main.ts::loadSettings after Object.assign merges defaults.
  */
 export function migrateSettings(raw: Partial<NLRSettings>): NLRSettings {
+  // Recover from a corrupted `llm` field (non-object) — we'd otherwise
+  // crash on the destructuring in mergeLLMSettings. Falling back to
+  // undefined lets the defaults take over.
+  const safeLlm = isPlainObject(raw.llm) ? (raw.llm as Partial<LLMManagerSettings>) : undefined;
   const merged: NLRSettings = {
     ...DEFAULT_SETTINGS,
     ...raw,
     apiKeys: { ...(raw.apiKeys || {}) },
-    llm: mergeLLMSettings(raw.llm, raw.apiKeys || {}),
+    llm: mergeLLMSettings(safeLlm, raw.apiKeys || {}),
     dispatcher: { ...DEFAULT_DISPATCHER_SETTINGS, ...(raw.dispatcher || {}) },
     subscription: { ...DEFAULT_SUBSCRIPTION_SETTINGS, ...(raw.subscription || {}) },
     schemaVersion: SETTINGS_SCHEMA_VERSION,
   };
   return merged;
+}
+
+function isPlainObject(v: unknown): boolean {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /**
@@ -162,10 +182,10 @@ function mergeLLMSettings(
   };
 
   // Layer in legacy keys (back-compat for one release).
-  const openrouterKey = legacyApiKeys.OPENROUTER_API_KEY;
-  if (openrouterKey) base.providers.openrouter.apiKey = openrouterKey;
-  const anthropicKey = legacyApiKeys.ANTHROPIC_API_KEY;
-  if (anthropicKey) base.providers.anthropic.apiKey = anthropicKey;
+  for (const { env, provider } of LEGACY_KEY_TO_PROVIDER) {
+    const legacyVal = legacyApiKeys[env];
+    if (legacyVal) base.providers[provider].apiKey = legacyVal;
+  }
 
   if (!rawLlm) return base;
 
@@ -174,7 +194,7 @@ function mergeLLMSettings(
     : base.priority;
 
   const providers = base.providers;
-  if (rawLlm.providers) {
+  if (rawLlm.providers && isPlainObject(rawLlm.providers)) {
     for (const id of Object.keys(rawLlm.providers) as ProviderId[]) {
       const incoming = rawLlm.providers[id] as Partial<LLMProviderSettings> | undefined;
       if (!incoming) continue;
@@ -186,6 +206,55 @@ function mergeLLMSettings(
   }
 
   return { priority, providers };
+}
+
+/**
+ * Propagate legacy env-style keys (the shape read by `loadSecretsEnv` out
+ * of `secrets/.env`) onto the new `llm.providers.<id>.apiKey` path that
+ * the provider classes actually consume.
+ *
+ * Returns the list of providers whose UI-set key differed from the env
+ * value — caller should surface those as warnings so we don't silently
+ * clobber a user's direct override.
+ *
+ * Addresses PR #26 adversarial review, blocker #4: prior to this helper,
+ * `loadSecretsEnv` only updated `apiKeys[...]`, so key rotation via .env
+ * was invisible to the LLM manager until a full plugin reload.
+ */
+export function syncLegacyApiKeys(settings: NLRSettings): Array<{
+  provider: ProviderId;
+  envKey: string;
+  uiValueLength: number;
+  envValueLength: number;
+}> {
+  const overrides: Array<{
+    provider: ProviderId;
+    envKey: string;
+    uiValueLength: number;
+    envValueLength: number;
+  }> = [];
+
+  for (const { env, provider } of LEGACY_KEY_TO_PROVIDER) {
+    const envVal = settings.apiKeys[env];
+    if (!envVal) continue;
+    const providerCfg = settings.llm.providers[provider];
+    if (!providerCfg) continue;
+    const uiVal = providerCfg.apiKey;
+    // If a user manually set a provider key in the UI that differs from
+    // the env value, flag it but still prefer env — `.env` is the
+    // authoritative "current deployment" source.
+    if (uiVal && uiVal !== envVal) {
+      overrides.push({
+        provider,
+        envKey: env,
+        uiValueLength: uiVal.length,
+        envValueLength: envVal.length,
+      });
+    }
+    providerCfg.apiKey = envVal;
+  }
+
+  return overrides;
 }
 
 function providerLabel(id: ProviderId): string {
@@ -1100,7 +1169,23 @@ export class NLRSettingTab extends PluginSettingTab {
       }
     }
 
+    // Propagate env-style keys onto the new `llm.providers.*.apiKey` path so
+    // the LLM manager actually sees rotated keys without a plugin reload.
+    // Addresses PR #26 adversarial review, blocker #4.
+    const overrides = syncLegacyApiKeys(this.plugin.settings);
+    for (const o of overrides) {
+      new Notice(
+        `Neuro-Link: ${providerLabel(o.provider)} key from secrets/.env differs from the value in the UI — env value wins. Update the UI field if this was unintended.`,
+        10000
+      );
+      console.warn(
+        `NLR settings: ${o.envKey} in secrets/.env diverges from llm.providers.${o.provider}.apiKey (ui len=${o.uiValueLength}, env len=${o.envValueLength}) — env preferred`
+      );
+    }
+
     await this.plugin.saveSettings();
+    // Refresh the manager so in-flight callers pick up the new keys.
+    this.plugin.refreshLLM();
     new Notice(`Loaded ${loaded} keys from secrets/.env`);
   }
 

@@ -4,10 +4,13 @@ import {
   WorkspaceLeaf,
   addIcon,
 } from "obsidian";
-import { NLRSettingTab, NLRSettings, DEFAULT_SETTINGS } from "./settings";
+import { NLRSettingTab, NLRSettings, DEFAULT_SETTINGS, migrateSettings } from "./settings";
 import { registerCommands } from "./commands";
 import { ChatbotView, VIEW_TYPE_CHATBOT } from "./chatbot";
 import { StatsView, VIEW_TYPE_STATS } from "./stats";
+import { LLMManager } from "./providers";
+import { VaultSubscriptionClient } from "./mcp-subscription";
+import { NewSpecDispatcher } from "./dispatcher/new-spec";
 import { execFile, ChildProcess, spawn } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
@@ -21,10 +24,18 @@ const CHART_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" 
 
 export default class NLRPlugin extends Plugin {
   settings: NLRSettings = DEFAULT_SETTINGS;
+  /** Single LLM manager the whole plugin shares. */
+  llm!: LLMManager;
+  /** Global AbortController — aborted on unload to terminate in-flight
+   *  fetches, WebSocket reconnect loops, and debounced file handlers. */
+  private lifetime = new AbortController();
   private serverProcess: ChildProcess | null = null;
+  private subscription: VaultSubscriptionClient | null = null;
+  private dispatcher: NewSpecDispatcher | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.llm = new LLMManager(this.settings.llm);
 
     addIcon("nlr-brain", BRAIN_ICON);
     addIcon("nlr-chart", CHART_ICON);
@@ -47,12 +58,47 @@ export default class NLRPlugin extends Plugin {
     await this.scaffoldVaultStructure();
     await this.checkNlrBinary();
     await this.startServer();
+    this.startVaultSubscription();
   }
 
   onunload(): void {
+    // Aborting first lets any pending fetch / debounce timer short-circuit
+    // before we tear down their owners.
+    this.lifetime.abort();
+    if (this.subscription) {
+      this.subscription.disconnect();
+      this.subscription = null;
+    }
+    this.dispatcher = null;
     this.stopServer();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHATBOT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_STATS);
+  }
+
+  /** Called from settings UI when LLM config changes to rebind the manager. */
+  refreshLLM(): void {
+    this.llm.updateSettings(this.settings.llm);
+  }
+
+  /** AbortSignal that fires at plugin unload — wire in long-running work. */
+  get lifetimeSignal(): AbortSignal {
+    return this.lifetime.signal;
+  }
+
+  private startVaultSubscription(): void {
+    if (!this.settings.subscription.enabled) return;
+
+    // Construct dispatcher first; the subscription forwards events to it.
+    this.dispatcher = new NewSpecDispatcher(this);
+
+    this.subscription = new VaultSubscriptionClient(this, async (event) => {
+      if (!this.dispatcher) return;
+      await this.dispatcher.handle(event);
+    });
+    this.subscription.connect().catch((e: unknown) => {
+      const err = e as Error;
+      console.warn("NLR subscription failed to connect:", err.message);
+    });
   }
 
   private async scaffoldVaultStructure(): Promise<void> {
@@ -214,8 +260,8 @@ export default class NLRPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    const data = (await this.loadData()) as Partial<NLRSettings> | null;
+    this.settings = migrateSettings(data || {});
     if (!this.settings.nlrRoot) {
       this.settings.nlrRoot = this.detectNlrRoot();
     }

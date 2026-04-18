@@ -11,8 +11,49 @@ import * as fs from "fs";
 import * as path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import {
+  DEFAULT_LLM_SETTINGS,
+  LLMManagerSettings,
+  LLMProviderSettings,
+} from "./providers";
+import { ProviderId } from "./providers/base";
 
 const execFileAsync = promisify(execFile);
+
+export const SETTINGS_SCHEMA_VERSION = 2;
+
+export interface DispatcherSettings {
+  /** Master switch for the file-drop → task-spec pipeline. */
+  enabled: boolean;
+  /** Watch glob passed to tv_subscribe_vault_events. */
+  watchGlob: string;
+  /** Directory (relative to vault root) where generated task specs land. */
+  taskOutputDir: string;
+  /** Debounce before reading a newly-created file to avoid partial writes. */
+  debounceMs: number;
+  /** Model override (defaults to the primary provider's default model). */
+  model: string;
+}
+
+export const DEFAULT_DISPATCHER_SETTINGS: DispatcherSettings = {
+  enabled: true,
+  watchGlob: "00-neuro-link/*.md",
+  taskOutputDir: "00-neuro-link/tasks",
+  debounceMs: 500,
+  model: "",
+};
+
+export interface SubscriptionSettings {
+  /** Master switch for the WebSocket subscription client. */
+  enabled: boolean;
+  /** WebSocket URL of the TurboVault MCP server. Empty = auto-derive from apiRouterPort. */
+  wsUrl: string;
+}
+
+export const DEFAULT_SUBSCRIPTION_SETTINGS: SubscriptionSettings = {
+  enabled: true,
+  wsUrl: "",
+};
 
 export interface HarnessConfig {
   name: string;
@@ -25,6 +66,7 @@ export interface HarnessConfig {
 }
 
 export interface NLRSettings {
+  schemaVersion: number;
   nlrRoot: string;
   nlrBinaryPath: string;
   vaultPath: string;
@@ -40,6 +82,9 @@ export interface NLRSettings {
   chatbotModel: string;
   chatbotSystemPrompt: string;
   apiRoutes: Array<{ keyName: string; provider: string; endpoint: string }>;
+  llm: LLMManagerSettings;
+  dispatcher: DispatcherSettings;
+  subscription: SubscriptionSettings;
 }
 
 const API_KEY_DEFS: Array<{ key: string; label: string; desc: string; defaultVal?: string; test: string }> = [
@@ -60,6 +105,7 @@ const API_KEY_DEFS: Array<{ key: string; label: string; desc: string; defaultVal
 ];
 
 export const DEFAULT_SETTINGS: NLRSettings = {
+  schemaVersion: SETTINGS_SCHEMA_VERSION,
   nlrRoot: "",
   nlrBinaryPath: "neuro-link",
   vaultPath: "",
@@ -75,7 +121,85 @@ export const DEFAULT_SETTINGS: NLRSettings = {
   chatbotModel: "anthropic/claude-sonnet-4-20250514",
   chatbotSystemPrompt: "You are an assistant with access to the neuro-link-recursive knowledge base. Use the provided wiki context to answer questions accurately.",
   apiRoutes: [],
+  llm: DEFAULT_LLM_SETTINGS,
+  dispatcher: DEFAULT_DISPATCHER_SETTINGS,
+  subscription: DEFAULT_SUBSCRIPTION_SETTINGS,
 };
+
+/**
+ * Migrates settings loaded from disk to the current schema. Preserves old
+ * top-level keys (OPENROUTER_API_KEY, ANTHROPIC_API_KEY) as fallbacks for
+ * the new `llm.providers` config when a user upgrades without reconfiguring.
+ *
+ * Called from main.ts::loadSettings after Object.assign merges defaults.
+ */
+export function migrateSettings(raw: Partial<NLRSettings>): NLRSettings {
+  const merged: NLRSettings = {
+    ...DEFAULT_SETTINGS,
+    ...raw,
+    apiKeys: { ...(raw.apiKeys || {}) },
+    llm: mergeLLMSettings(raw.llm, raw.apiKeys || {}),
+    dispatcher: { ...DEFAULT_DISPATCHER_SETTINGS, ...(raw.dispatcher || {}) },
+    subscription: { ...DEFAULT_SUBSCRIPTION_SETTINGS, ...(raw.subscription || {}) },
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
+  };
+  return merged;
+}
+
+/**
+ * Build llm settings by layering (in order of precedence):
+ *   1. Explicit `raw.llm` block (new-schema users)
+ *   2. Legacy API keys stored under apiKeys (pre-schemaVersion 2 users)
+ *   3. DEFAULT_LLM_SETTINGS
+ */
+function mergeLLMSettings(
+  rawLlm: Partial<LLMManagerSettings> | undefined,
+  legacyApiKeys: Record<string, string>
+): LLMManagerSettings {
+  const base: LLMManagerSettings = {
+    priority: [...DEFAULT_LLM_SETTINGS.priority],
+    providers: JSON.parse(JSON.stringify(DEFAULT_LLM_SETTINGS.providers)) as LLMManagerSettings["providers"],
+  };
+
+  // Layer in legacy keys (back-compat for one release).
+  const openrouterKey = legacyApiKeys.OPENROUTER_API_KEY;
+  if (openrouterKey) base.providers.openrouter.apiKey = openrouterKey;
+  const anthropicKey = legacyApiKeys.ANTHROPIC_API_KEY;
+  if (anthropicKey) base.providers.anthropic.apiKey = anthropicKey;
+
+  if (!rawLlm) return base;
+
+  const priority = Array.isArray(rawLlm.priority) && rawLlm.priority.length > 0
+    ? [...(rawLlm.priority as ProviderId[])]
+    : base.priority;
+
+  const providers = base.providers;
+  if (rawLlm.providers) {
+    for (const id of Object.keys(rawLlm.providers) as ProviderId[]) {
+      const incoming = rawLlm.providers[id] as Partial<LLMProviderSettings> | undefined;
+      if (!incoming) continue;
+      providers[id] = {
+        ...providers[id],
+        ...incoming,
+      };
+    }
+  }
+
+  return { priority, providers };
+}
+
+function providerLabel(id: ProviderId): string {
+  switch (id) {
+    case "openrouter":
+      return "OpenRouter";
+    case "anthropic":
+      return "Anthropic";
+    case "openai":
+      return "OpenAI";
+    case "local-llama":
+      return "Local llama-server";
+  }
+}
 
 export class NLRSettingTab extends PluginSettingTab {
   plugin: NLRPlugin;
@@ -92,10 +216,198 @@ export class NLRSettingTab extends PluginSettingTab {
     this.renderPathsSection(containerEl);
     this.renderFolderAccessSection(containerEl);
     this.renderApiKeysSection(containerEl);
+    this.renderLLMProvidersSection(containerEl);
+    this.renderDispatcherSection(containerEl);
     this.renderHarnessSection(containerEl);
     this.renderMcpSection(containerEl);
     this.renderLoggingSection(containerEl);
     this.renderChatbotSection(containerEl);
+  }
+
+  private renderLLMProvidersSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h2", { text: "LLM Providers" });
+    containerEl.createEl("p", {
+      text: "Configure which LLM backends the plugin can call. Priority order determines fallback on rate-limits or transient failures.",
+      cls: "setting-item-description",
+    });
+
+    const llm = this.plugin.settings.llm;
+    const providerIds: ProviderId[] = ["openrouter", "anthropic", "openai", "local-llama"];
+
+    // Priority order — render as ordered list with up/down buttons.
+    containerEl.createEl("h3", { text: "Priority / Fallback Order" });
+    const orderEl = containerEl.createDiv({ cls: "nlr-provider-order" });
+    this.renderPriorityList(orderEl, llm, providerIds);
+
+    // Per-provider config
+    for (const id of providerIds) {
+      this.renderProviderBlock(containerEl, id);
+    }
+  }
+
+  private renderPriorityList(
+    orderEl: HTMLElement,
+    llm: LLMManagerSettings,
+    providerIds: ProviderId[]
+  ): void {
+    orderEl.empty();
+
+    // Ensure the priority list includes every known provider (missing ones
+    // append to the end in discovery order — this makes newly-added providers
+    // visible without forcing the user to re-order).
+    const seen = new Set(llm.priority);
+    for (const id of providerIds) {
+      if (!seen.has(id)) llm.priority.push(id);
+    }
+
+    for (let i = 0; i < llm.priority.length; i++) {
+      const id = llm.priority[i];
+      const setting = new Setting(orderEl).setName(`${i + 1}. ${providerLabel(id)}`);
+
+      if (i > 0) {
+        setting.addButton((btn: ButtonComponent) =>
+          btn.setButtonText("Up").onClick(async () => {
+            [llm.priority[i - 1], llm.priority[i]] = [llm.priority[i], llm.priority[i - 1]];
+            await this.plugin.saveSettings();
+            this.renderPriorityList(orderEl, llm, providerIds);
+          })
+        );
+      }
+      if (i < llm.priority.length - 1) {
+        setting.addButton((btn: ButtonComponent) =>
+          btn.setButtonText("Down").onClick(async () => {
+            [llm.priority[i], llm.priority[i + 1]] = [llm.priority[i + 1], llm.priority[i]];
+            await this.plugin.saveSettings();
+            this.renderPriorityList(orderEl, llm, providerIds);
+          })
+        );
+      }
+    }
+  }
+
+  private renderProviderBlock(containerEl: HTMLElement, id: ProviderId): void {
+    containerEl.createEl("h3", { text: providerLabel(id) });
+    const cfg = this.plugin.settings.llm.providers[id];
+
+    new Setting(containerEl)
+      .setName("API Key")
+      .setDesc(id === "local-llama" ? "Usually blank for local servers" : "Bearer token / API key")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.setValue(cfg.apiKey).onChange(async (v) => {
+          cfg.apiKey = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshLLM();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Base URL")
+      .addText((text) =>
+        text.setValue(cfg.baseUrl).onChange(async (v) => {
+          cfg.baseUrl = v.trim();
+          await this.plugin.saveSettings();
+          this.plugin.refreshLLM();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Default Model")
+      .addText((text) =>
+        text.setValue(cfg.defaultModel).onChange(async (v) => {
+          cfg.defaultModel = v.trim();
+          await this.plugin.saveSettings();
+          this.plugin.refreshLLM();
+        })
+      );
+  }
+
+  private renderDispatcherSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h2", { text: "File-drop Task Dispatcher" });
+    containerEl.createEl("p", {
+      text: "On FileCreated under 00-neuro-link/ (top-level only), read frontmatter+body, call the primary LLM, and write a task spec under 00-neuro-link/tasks/.",
+      cls: "setting-item-description",
+    });
+
+    const d = this.plugin.settings.dispatcher;
+
+    new Setting(containerEl)
+      .setName("Enabled")
+      .addToggle((toggle) =>
+        toggle.setValue(d.enabled).onChange(async (v) => {
+          d.enabled = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Watch Glob")
+      .setDesc("Glob pattern passed to tv_subscribe_vault_events")
+      .addText((text) =>
+        text.setValue(d.watchGlob).onChange(async (v) => {
+          d.watchGlob = v.trim();
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Task Output Dir")
+      .setDesc("Vault-relative directory for generated task specs")
+      .addText((text) =>
+        text.setValue(d.taskOutputDir).onChange(async (v) => {
+          d.taskOutputDir = v.trim();
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Debounce (ms)")
+      .setDesc("Wait this long after FileCreated before reading (avoid partial-write races)")
+      .addText((text) =>
+        text.setValue(String(d.debounceMs)).onChange(async (v) => {
+          const n = parseInt(v, 10);
+          if (!isNaN(n) && n >= 0) {
+            d.debounceMs = n;
+            await this.plugin.saveSettings();
+          }
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Model Override")
+      .setDesc("Leave blank to use the primary provider's default model")
+      .addText((text) =>
+        text.setPlaceholder("(use default)").setValue(d.model).onChange(async (v) => {
+          d.model = v.trim();
+          await this.plugin.saveSettings();
+        })
+      );
+
+    containerEl.createEl("h3", { text: "MCP Subscription (TurboVault)" });
+    const s = this.plugin.settings.subscription;
+
+    new Setting(containerEl)
+      .setName("Enabled")
+      .setDesc("Connect to TurboVault via WebSocket at plugin load")
+      .addToggle((toggle) =>
+        toggle.setValue(s.enabled).onChange(async (v) => {
+          s.enabled = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("WebSocket URL")
+      .setDesc("Leave blank to auto-derive from API Router Port")
+      .addText((text) =>
+        text
+          .setPlaceholder(`ws://localhost:${this.plugin.settings.apiRouterPort}/mcp/ws`)
+          .setValue(s.wsUrl)
+          .onChange(async (v) => {
+            s.wsUrl = v.trim();
+            await this.plugin.saveSettings();
+          })
+      );
   }
 
   private renderPathsSection(containerEl: HTMLElement): void {

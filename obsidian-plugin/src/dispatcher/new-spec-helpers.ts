@@ -3,6 +3,22 @@
  * so the unit tests can import them without pulling the `obsidian` runtime.
  */
 
+import { createHash } from "crypto";
+
+/**
+ * Stable content hash used to detect mid-flight edits — if the source file
+ * changes between the pre-LLM read and the post-LLM write, we must discard
+ * the generated spec rather than persist stale content.
+ *
+ * SHA-256 is cheap for the small markdown files the dispatcher sees
+ * (typically < 10 KiB) and gives effectively zero collision risk without
+ * bringing in a crypto dependency — Node's `crypto` module is available in
+ * Electron / the Obsidian runtime.
+ */
+export function hashContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
 export interface TaskSpec {
   slug: string;
   title: string;

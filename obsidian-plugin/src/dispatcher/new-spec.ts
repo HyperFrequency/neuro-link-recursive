@@ -30,6 +30,7 @@ import {
   sanitiseSlug,
   validateSpec,
   renderTaskMarkdown,
+  hashContent,
   FALLBACK_PROMPT,
   type TaskSpec,
 } from "./new-spec-helpers";
@@ -37,6 +38,8 @@ import {
 export { sanitiseSlug, FALLBACK_PROMPT, type TaskSpec };
 
 const TASK_EMIT_TOOL = "emit_task_spec";
+/** Cap on stale-content retries before the dispatcher gives up. */
+const MAX_STALE_RETRIES = 1;
 
 export class NewSpecDispatcher {
   private plugin: NLRPlugin;
@@ -86,7 +89,7 @@ export class NewSpecDispatcher {
     return !rest.includes("/");
   }
 
-  private async process(vaultPath: string): Promise<void> {
+  private async process(vaultPath: string, retryCount = 0): Promise<void> {
     if (this.inflight.has(vaultPath)) return;
     this.inflight.add(vaultPath);
 
@@ -97,9 +100,40 @@ export class NewSpecDispatcher {
         return;
       }
 
+      // Hash the content we're about to feed to the LLM. The round-trip
+      // can take 8-20 s; if the user edits the file mid-flight, the generated
+      // spec will describe stale content. After the LLM returns we re-read
+      // and compare — on mismatch we discard the output and re-queue once.
+      // See PR #26 adversarial review, blocker #3.
+      const contentHash = hashContent(content);
+
       const prompt = this.renderPrompt(vaultPath, content);
       const spec = await this.callLLM(prompt);
       if (!spec) return;
+
+      // Re-read after the LLM round-trip and compare hashes. If the file
+      // changed, the spec we hold is stale — throw it away.
+      const currentContent = await this.readCurrent(vaultPath);
+      if (currentContent === null) {
+        console.warn(`NLR dispatcher: ${vaultPath} disappeared during LLM call — discarding spec`);
+        return;
+      }
+      if (hashContent(currentContent) !== contentHash) {
+        if (retryCount < MAX_STALE_RETRIES) {
+          console.warn(`NLR dispatcher: ${vaultPath} edited mid-flight — re-queueing (attempt ${retryCount + 1})`);
+          // Release the inflight lock via `finally` below, then re-dispatch.
+          // We do the recursion *after* the finally so the second call can
+          // acquire the lock fresh; queueMicrotask avoids deep recursion.
+          queueMicrotask(() => {
+            void this.process(vaultPath, retryCount + 1);
+          });
+          return;
+        }
+        console.warn(
+          `NLR dispatcher: ${vaultPath} still edited after ${MAX_STALE_RETRIES} retry — giving up`
+        );
+        return;
+      }
 
       const outputPath = await this.writeTaskSpec(vaultPath, spec);
       if (outputPath) {
@@ -111,6 +145,27 @@ export class NewSpecDispatcher {
       new Notice(`Task-spec generation failed for ${path.basename(vaultPath)} — check console`);
     } finally {
       this.inflight.delete(vaultPath);
+    }
+  }
+
+  /**
+   * Read the file's current content via the same path the pre-LLM read used,
+   * but without the newline-stability retry — we only need a snapshot for
+   * comparing hashes. Returns null if the file is gone.
+   */
+  private async readCurrent(vaultPath: string): Promise<string | null> {
+    try {
+      const file = this.plugin.app.vault.getAbstractFileByPath(vaultPath);
+      if (file instanceof TFile) {
+        return await this.plugin.app.vault.read(file);
+      }
+      const vaultBase = this.plugin.settings.vaultPath;
+      if (!vaultBase) return null;
+      const fsPath = path.join(vaultBase, vaultPath);
+      if (!fs.existsSync(fsPath)) return null;
+      return fs.readFileSync(fsPath, "utf-8");
+    } catch {
+      return null;
     }
   }
 

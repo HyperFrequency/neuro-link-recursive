@@ -83,6 +83,69 @@ export class NewSpecDispatcher {
   }
 
   /**
+   * Cold-start catch-up scan. Walks `00-neuro-link/*.md` (top-level only)
+   * for files modified in the last `lookbackMs` whose `source:` frontmatter
+   * doesn't yet appear in any `00-neuro-link/tasks/*.md`, and queues each
+   * one through `handle({kind: "FileCreated", ...})`.
+   *
+   * This covers the window between `plugin.onload` finishing and the
+   * vault-event subscription actually connecting — during that 50-300 ms
+   * (or longer, over network), a file dropped by the user is invisible
+   * to the server-side subscription. The review (should-fix #9) notes
+   * this becomes worse with the long-poll pull transport, so this
+   * catch-up path is intentionally transport-agnostic: it reads the
+   * vault directly rather than asking the server for missed events.
+   *
+   * Runs asynchronously; call-site fire-and-forgets. Errors are logged
+   * per file and don't abort the whole scan.
+   */
+  async scanCatchUp(lookbackMs = 60_000): Promise<number> {
+    if (!this.plugin.settings.dispatcher.enabled) return 0;
+
+    const watchedPrefix = "00-neuro-link/";
+    const taskDir = this.plugin.settings.dispatcher.taskOutputDir.replace(/\/$/, "");
+    const cutoff = Date.now() - lookbackMs;
+
+    // Collect source paths already registered in existing task specs so we
+    // don't re-dispatch something the previous session already processed.
+    const processedSources = new Set<string>();
+    for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+      const filePath = file.path.replace(/\\/g, "/");
+      if (!filePath.startsWith(`${taskDir}/`)) continue;
+      try {
+        const body = await this.plugin.app.vault.read(file);
+        const match = body.match(/^source:\s*"([^"]+)"/m);
+        if (match) processedSources.add(match[1]);
+      } catch {
+        /* skip unreadable task file */
+      }
+    }
+
+    // Walk top-level .md files under the watched folder; queue any
+    // recent + unprocessed file.
+    let queued = 0;
+    for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+      const filePath = file.path.replace(/\\/g, "/");
+      if (!this.isWatchedPath(filePath)) continue;
+      const mtime = file.stat?.mtime ?? 0;
+      if (mtime < cutoff) continue;
+      if (processedSources.has(filePath)) continue;
+
+      queued++;
+      this.handle({
+        kind: "FileCreated",
+        path: filePath,
+        timestamp: mtime,
+      });
+    }
+
+    if (queued > 0) {
+      console.log(`NLR dispatcher: cold-start catch-up queued ${queued} file(s) from ${watchedPrefix}`);
+    }
+    return queued;
+  }
+
+  /**
    * Entry point called from the subscription. Also safe to call directly
    * from the Obsidian `vault.on("create", ...)` event as a backup path
    * (not wired by default — the MCP subscription is authoritative).

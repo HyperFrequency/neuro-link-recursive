@@ -99,6 +99,16 @@ export default class NLRPlugin extends Plugin {
       const err = e as Error;
       console.warn("NLR subscription failed to connect:", err.message);
     });
+
+    // Cold-start catch-up: dispatch any recent files that landed in the
+    // window between `onload` starting and the subscription connecting.
+    // Transport-agnostic (reads the vault directly), so it remains useful
+    // after the WebSocket-to-long-poll pivot. See PR #26 review,
+    // should-fix #9.
+    this.dispatcher.scanCatchUp().catch((e: unknown) => {
+      const err = e as Error;
+      console.warn("NLR dispatcher: cold-start scan failed:", err.message);
+    });
   }
 
   private async scaffoldVaultStructure(): Promise<void> {

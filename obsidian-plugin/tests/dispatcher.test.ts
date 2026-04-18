@@ -433,3 +433,136 @@ describe("NewSpecDispatcher — slug collision under concurrency", () => {
     expect(writtenPaths).toContain("00-neuro-link/tasks/shared-slug-1.md");
   });
 });
+
+// ── Should-fix #9: cold-start catch-up scan ────────────────────────────
+//
+// Between `plugin.onload` finishing and the vault-event subscription
+// actually connecting (50-300 ms locally, longer over network), files the
+// user drops are invisible to the server-side event stream. scanCatchUp
+// reads the vault directly to fill that gap — transport-agnostic, so it
+// survives the upcoming WebSocket-to-long-poll pivot.
+describe("NewSpecDispatcher — cold-start catch-up scan", () => {
+  interface FakeTFile {
+    path: string;
+    stat: { mtime: number };
+  }
+
+  function buildCatchupPlugin(files: FakeTFile[], taskBodies: Record<string, string>): {
+    plugin: unknown;
+    queued: string[];
+  } {
+    const queued: string[] = [];
+    const plugin = {
+      settings: {
+        dispatcher: {
+          enabled: true,
+          watchGlob: "00-neuro-link/*.md",
+          taskOutputDir: "00-neuro-link/tasks",
+          debounceMs: 1,
+          model: "test-model",
+        },
+        vaultPath: "/fake/vault",
+      },
+      lifetimeSignal: new AbortController().signal,
+      app: {
+        vault: {
+          getMarkdownFiles: (): FakeTFile[] => files,
+          getAbstractFileByPath: (): unknown => null,
+          read: async (f: FakeTFile): Promise<string> => taskBodies[f.path] ?? "",
+          create: async (): Promise<void> => { /* no-op */ },
+          createFolder: async (): Promise<void> => { /* no-op */ },
+        },
+      },
+      llm: {
+        defaultModel: (): string => "test-model",
+        tool_use: async (): Promise<unknown> => {
+          throw new Error("should not be called in scan test");
+        },
+      },
+    };
+    // Intercept handle() via a test-only spy once the dispatcher is
+    // constructed.
+    return { plugin, queued };
+  }
+
+  test("queues recent top-level files with no matching task spec", async () => {
+    const { NewSpecDispatcher } = await import("../src/dispatcher/new-spec");
+
+    const now = Date.now();
+    const files: FakeTFile[] = [
+      { path: "00-neuro-link/fresh.md", stat: { mtime: now - 10_000 } }, // 10s old
+      { path: "00-neuro-link/old.md", stat: { mtime: now - 600_000 } }, // 10min old
+      { path: "00-neuro-link/subfolder/ignored.md", stat: { mtime: now } },
+      { path: "00-neuro-link/tasks/existing.md", stat: { mtime: now } },
+      {
+        path: "00-neuro-link/already-processed.md",
+        stat: { mtime: now - 5_000 },
+      },
+    ];
+    const taskBodies: Record<string, string> = {
+      "00-neuro-link/tasks/existing.md":
+        '---\ntitle: "Existing"\nsource: "00-neuro-link/already-processed.md"\n---\n',
+    };
+
+    const { plugin, queued } = buildCatchupPlugin(files, taskBodies);
+    const dispatcher = new NewSpecDispatcher(plugin as unknown as never);
+    // Spy on handle() to record what the scan dispatches.
+    const originalHandle = (dispatcher as unknown as { handle: (e: unknown) => void }).handle.bind(
+      dispatcher
+    );
+    (dispatcher as unknown as { handle: (e: { path: string }) => void }).handle = (e) => {
+      queued.push(e.path);
+      // Don't actually call the original — we just want to observe
+      // which paths get queued without triggering the debounce timer.
+      void originalHandle; // keep ref to avoid lint warnings
+    };
+
+    const count = await (
+      dispatcher as unknown as { scanCatchUp: (ms?: number) => Promise<number> }
+    ).scanCatchUp(60_000);
+
+    // fresh.md should queue; old.md is outside the lookback; subfolder
+    // file fails isWatchedPath; tasks/* aren't watched; already-processed.md
+    // is filtered by the task-spec cross-ref.
+    expect(count).toBe(1);
+    expect(queued).toEqual(["00-neuro-link/fresh.md"]);
+  });
+
+  test("returns 0 when dispatcher is disabled", async () => {
+    const { NewSpecDispatcher } = await import("../src/dispatcher/new-spec");
+    const { plugin } = buildCatchupPlugin(
+      [
+        {
+          path: "00-neuro-link/fresh.md",
+          stat: { mtime: Date.now() },
+        },
+      ],
+      {}
+    );
+    (plugin as { settings: { dispatcher: { enabled: boolean } } }).settings.dispatcher.enabled =
+      false;
+    const dispatcher = new NewSpecDispatcher(plugin as unknown as never);
+    const count = await (
+      dispatcher as unknown as { scanCatchUp: () => Promise<number> }
+    ).scanCatchUp();
+    expect(count).toBe(0);
+  });
+
+  test("returns 0 when nothing is recent enough", async () => {
+    const { NewSpecDispatcher } = await import("../src/dispatcher/new-spec");
+    const { plugin } = buildCatchupPlugin(
+      [
+        {
+          path: "00-neuro-link/stale.md",
+          stat: { mtime: Date.now() - 3_600_000 },
+        },
+      ],
+      {}
+    );
+    const dispatcher = new NewSpecDispatcher(plugin as unknown as never);
+    const count = await (
+      dispatcher as unknown as { scanCatchUp: (ms?: number) => Promise<number> }
+    ).scanCatchUp(60_000);
+    expect(count).toBe(0);
+  });
+});

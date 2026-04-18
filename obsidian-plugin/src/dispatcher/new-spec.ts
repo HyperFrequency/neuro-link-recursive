@@ -45,9 +45,41 @@ export class NewSpecDispatcher {
   private plugin: NLRPlugin;
   private inflight = new Set<string>();
   private debounces = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Serialises slug-selection + vault.create across all in-flight dispatches.
+   * Prior to this lock, two parallel drops whose LLM-generated slugs
+   * collided could both see the same base path as free, both call
+   * `vault.create`, and race — the loser's error was swallowed as a warning
+   * (see PR #26 adversarial review, should-fix #13). Holding the lock for
+   * the existence-check + create window makes the suffix assignment
+   * atomic from any concurrent dispatcher's point of view.
+   */
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(plugin: NLRPlugin) {
     this.plugin = plugin;
+  }
+
+  /**
+   * Runs `fn` under the write-lock. Other callers queue until the current
+   * one resolves. Errors propagate to the caller — the chain keeps going
+   * so a single bad dispatch doesn't permanently block the queue.
+   */
+  private async runWithWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.writeChain;
+    // `next` resolves after `fn()` settles; subsequent callers chain off
+    // this promise regardless of success/failure.
+    let resolve: () => void;
+    const next = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.writeChain = prev.then(() => next);
+    try {
+      await prev;
+      return await fn();
+    } finally {
+      resolve!();
+    }
   }
 
   /**
@@ -293,31 +325,50 @@ export class NewSpecDispatcher {
   }
 
   private async writeTaskSpec(sourcePath: string, spec: TaskSpec): Promise<string | null> {
-    const outDir = this.plugin.settings.dispatcher.taskOutputDir.replace(/\/$/, "");
-    const baseSlug = sanitiseSlug(spec.slug);
-    let attempt = 0;
-    let targetPath = `${outDir}/${baseSlug}.md`;
-    while (this.plugin.app.vault.getAbstractFileByPath(targetPath)) {
-      attempt++;
-      targetPath = `${outDir}/${baseSlug}-${attempt}.md`;
-      if (attempt > 32) {
-        console.warn("NLR dispatcher: exhausted slug suffixes, aborting");
-        return null;
-      }
-    }
+    // Slug-selection and vault.create are held under `writeChain` so two
+    // concurrent dispatches that slugify the same way can't both resolve
+    // the same free path — see runWithWriteLock above.
+    return this.runWithWriteLock(async () => {
+      const outDir = this.plugin.settings.dispatcher.taskOutputDir.replace(/\/$/, "");
+      const baseSlug = sanitiseSlug(spec.slug);
+      const body = renderTaskMarkdown(sourcePath, spec);
+      const MAX_SUFFIX = 32;
 
-    // Ensure output folder exists.
-    if (!this.plugin.app.vault.getAbstractFileByPath(outDir)) {
-      try {
-        await this.plugin.app.vault.createFolder(outDir);
-      } catch {
-        /* already exists */
+      // Ensure output folder exists once before the loop.
+      if (!this.plugin.app.vault.getAbstractFileByPath(outDir)) {
+        try {
+          await this.plugin.app.vault.createFolder(outDir);
+        } catch {
+          /* already exists */
+        }
       }
-    }
 
-    const body = renderTaskMarkdown(sourcePath, spec);
-    await this.plugin.app.vault.create(targetPath, body);
-    return targetPath;
+      // Loop: pick a candidate slug, try to create. If the vault reports
+      // the file already exists (a race we didn't expect — the lock
+      // *should* prevent this, but stale Obsidian cache or filesystem
+      // churn can still surprise us), bump the suffix and try again.
+      // Once we hold the lock, only another process (not another
+      // dispatch) can introduce this race, so at most a handful of
+      // retries are ever needed.
+      for (let attempt = 0; attempt <= MAX_SUFFIX; attempt++) {
+        const targetPath =
+          attempt === 0 ? `${outDir}/${baseSlug}.md` : `${outDir}/${baseSlug}-${attempt}.md`;
+        if (this.plugin.app.vault.getAbstractFileByPath(targetPath)) continue;
+        try {
+          await this.plugin.app.vault.create(targetPath, body);
+          return targetPath;
+        } catch (e) {
+          // Obsidian throws "File already exists" for the races we care
+          // about. Other errors (ENOSPC, permission denied, etc.) should
+          // surface to the caller — re-throw.
+          const msg = (e as Error).message || "";
+          if (!/already exists|exists/i.test(msg)) throw e;
+          // else: fall through to the next suffix.
+        }
+      }
+      console.warn("NLR dispatcher: exhausted slug suffixes, aborting");
+      return null;
+    });
   }
 }
 

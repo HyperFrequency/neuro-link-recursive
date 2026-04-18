@@ -338,3 +338,98 @@ describe("NewSpecDispatcher — stale-content race", () => {
     expect(runs.length).toBe(0);
   });
 });
+
+// ── Should-fix #13: slug-collision TOCTOU ──────────────────────────────
+//
+// Two concurrent drops with identical basenames that slugify the same way
+// previously raced between the existence-check and `vault.create`. Under
+// the write-chain mutex, slug selection and create are atomic; both
+// dispatches should end up writing to distinct paths (foo.md and foo-1.md).
+describe("NewSpecDispatcher — slug collision under concurrency", () => {
+  test("two concurrent dispatches with the same slug write to distinct paths", async () => {
+    const { NewSpecDispatcher } = await import("../src/dispatcher/new-spec");
+    const { TFile } = await import("obsidian");
+
+    const writtenPaths: string[] = [];
+    // Mock vault: getAbstractFileByPath returns null unless we've already
+    // written to that path (simulating the real vault where a freshly-
+    // created file becomes discoverable only after vault.create resolves).
+    const fakeFile = {};
+    Object.setPrototypeOf(fakeFile, (TFile as unknown as { prototype: object }).prototype);
+
+    const content = "Same content\n";
+
+    const plugin = {
+      settings: {
+        dispatcher: {
+          enabled: true,
+          watchGlob: "00-neuro-link/*.md",
+          taskOutputDir: "00-neuro-link/tasks",
+          debounceMs: 0,
+          model: "test-model",
+        },
+        vaultPath: "/fake/vault",
+      },
+      lifetimeSignal: new AbortController().signal,
+      app: {
+        vault: {
+          getAbstractFileByPath: (p: string): unknown => {
+            // Source reads — return the fake file stub.
+            if (p === "00-neuro-link/a.md" || p === "00-neuro-link/b.md") return fakeFile;
+            // Output dir check.
+            if (p === "00-neuro-link/tasks") return fakeFile;
+            // Task output paths — return truthy only if already written.
+            if (writtenPaths.includes(p)) return fakeFile;
+            return null;
+          },
+          read: async (): Promise<string> => content,
+          create: async (p: string, _body: string): Promise<void> => {
+            // Simulate a short async gap so the two dispatches genuinely
+            // interleave; without this both runs can wrap up in the same
+            // microtask and the race wouldn't exercise the lock.
+            await new Promise((r) => setTimeout(r, 2));
+            if (writtenPaths.includes(p)) {
+              const err = new Error(`File already exists: ${p}`);
+              throw err;
+            }
+            writtenPaths.push(p);
+          },
+          createFolder: async (): Promise<void> => {
+            /* no-op */
+          },
+        },
+      },
+      llm: {
+        defaultModel: (): string => "test-model",
+        tool_use: async (): Promise<unknown> => ({
+          content: "",
+          tool_calls: [
+            {
+              id: "t1",
+              name: "emit_task_spec",
+              arguments: JSON.stringify({
+                slug: "shared-slug",
+                title: "Shared",
+                type: "other",
+                description: "d",
+              }),
+            },
+          ],
+        }),
+      },
+    };
+
+    const dispatcher = new NewSpecDispatcher(plugin as unknown as never);
+    const run = (p: string): Promise<void> =>
+      (dispatcher as unknown as { process: (p: string) => Promise<void> }).process(p);
+
+    // Fire two concurrent process() calls — both will slugify to
+    // `shared-slug` but must end up on distinct paths.
+    await Promise.all([run("00-neuro-link/a.md"), run("00-neuro-link/b.md")]);
+
+    expect(writtenPaths.length).toBe(2);
+    expect(new Set(writtenPaths).size).toBe(2); // distinct
+    expect(writtenPaths).toContain("00-neuro-link/tasks/shared-slug.md");
+    expect(writtenPaths).toContain("00-neuro-link/tasks/shared-slug-1.md");
+  });
+});

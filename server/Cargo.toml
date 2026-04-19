@@ -48,6 +48,8 @@ serde_json = "1"
 # Blocking reqwest client for the P18 docker-backed neo4j integration test
 # (wait-for-ready polling + cypher HTTP seed).
 reqwest = { version = "0.12", features = ["json", "blocking"] }
+# Codex finding #6: in-process HTTP mock for Qdrant upsert-status tests in embed.rs.
+wiremock = "0.6"
 
 [features]
 # P18 — gate the docker-backed neo4j integration test. Off by default so

@@ -83,6 +83,65 @@ pub(crate) async fn preflight_embedding_backend(
     }
 }
 
+/// Codex finding #6: pre-flight that the Qdrant collection exists and its
+/// configured vector size matches the embedding dimension we're about to
+/// write. Prior behavior silently accepted a mismatched / missing collection
+/// and reported `count == N` even though every upsert was failing.
+///
+/// Returns `Ok(())` when the collection exists *and* its `vectors.size` (or
+/// any named-vector entry's `size`) equals `expected_dims`. Returns a loud
+/// error with the URL + body otherwise.
+async fn preflight_qdrant_collection(
+    client: &reqwest::Client,
+    qdrant_url: &str,
+    collection: &str,
+    expected_dims: usize,
+) -> Result<()> {
+    let url = format!("{qdrant_url}/collections/{collection}");
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("Qdrant collection preflight GET {url} failed"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "Qdrant collection '{collection}' not available (HTTP {status} from {url}): {body}"
+        );
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .with_context(|| format!("Qdrant collection preflight: non-JSON response from {url}"))?;
+
+    // Qdrant returns either a single unnamed vector config (`result.config.params.vectors.size`)
+    // or a map of named vector configs (`result.config.params.vectors.<name>.size`). Accept
+    // any configuration whose declared size matches — fail loudly otherwise.
+    let vectors = &body["result"]["config"]["params"]["vectors"];
+    let actual_dim = if let Some(size) = vectors.get("size").and_then(|v| v.as_u64()) {
+        Some(size as usize)
+    } else if let Some(map) = vectors.as_object() {
+        map.values()
+            .find_map(|v| v.get("size").and_then(|s| s.as_u64()))
+            .map(|s| s as usize)
+    } else {
+        None
+    };
+
+    match actual_dim {
+        Some(dim) if dim == expected_dims => Ok(()),
+        Some(dim) => anyhow::bail!(
+            "Qdrant collection '{collection}' has vector size {dim}, but embedder produces {expected_dims}-dim vectors — recreate the collection or reconfigure the embedder"
+        ),
+        None => anyhow::bail!(
+            "Qdrant collection '{collection}' exists but its vector config is unreadable: {body}"
+        ),
+    }
+}
+
 pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result<usize> {
     let collection = "nlr_wiki";
     let client = reqwest::Client::new();
@@ -104,8 +163,12 @@ pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result
             }))
             .send()
             .await
-            .context("Failed to create Qdrant collection")?;
+            .context("Failed to create Qdrant collection")?
+            .error_for_status()
+            .context("Qdrant rejected collection-create request")?;
     }
+
+    preflight_qdrant_collection(&client, qdrant_url, collection, embedding_dims).await?;
 
     let kb = root.join("02-KB-main");
     let skip = ["schema.md", "index.md", "log.md"];
@@ -145,9 +208,13 @@ pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result
             continue;
         }
 
+        // Only count upserts that Qdrant actually accepted; previously the
+        // counter was bumped on any send() resolution, making silent
+        // rejects invisible in the success log.
         let point_id = uuid::Uuid::new_v4().to_string();
-        let _ = client
-            .put(format!("{qdrant_url}/collections/{collection}/points"))
+        let upsert_url = format!("{qdrant_url}/collections/{collection}/points");
+        match client
+            .put(&upsert_url)
             .json(&serde_json::json!({
                 "points": [{
                     "id": point_id,
@@ -156,9 +223,23 @@ pub async fn embed_wiki(root: &Path, qdrant_url: &str, recreate: bool) -> Result
                 }]
             }))
             .send()
-            .await;
-
-        count += 1;
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    count += 1;
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!(
+                        "Qdrant upsert for {rel} failed: HTTP {status} from {upsert_url}: {body}"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!("Qdrant upsert for {rel} errored: {err}");
+            }
+        }
     }
 
     Ok(count)
@@ -221,4 +302,178 @@ pub async fn search_wiki(
         .unwrap_or_default();
 
     Ok(results)
+}
+
+// Codex finding #6 regression tests: prove that `embed_wiki` now surfaces
+// Qdrant failures instead of silently reporting success.
+//
+// Three wiremock cases, as specified in the Codex report:
+//   (a) missing collection          → GET /collections returns 404 → Err
+//   (b) wrong vector dimension      → GET ok but size != embedder dim → Err
+//   (c) happy path                  → GET ok + PUT /points ok → count == N
+//
+// `resolve_embedding_config` reads EMBEDDING_API_URL / EMBEDDING_MODEL from
+// the process env. Tests that mutate those must be serialized — cargo runs
+// tests in parallel threads within a process, so a shared Mutex guards each
+// body.
+#[cfg(test)]
+mod qdrant_upsert_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Serialize tests that mutate process-global env vars.
+    static ENV_GUARD: Mutex<()> = Mutex::new(());
+
+    const EMBED_DIM: usize = 4096;
+
+    fn make_vault(tmp: &tempfile::TempDir, num_pages: usize) -> std::path::PathBuf {
+        let root = tmp.path().to_path_buf();
+        let kb = root.join("02-KB-main");
+        std::fs::create_dir_all(&kb).unwrap();
+        // Minimal config so resolve_embedding_config sees our dims (env vars
+        // only override model/url, not dims).
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(
+            root.join("config/neuro-link.md"),
+            format!(
+                "---\nembedding_model: test-model\nembedding_dims: {EMBED_DIM}\n---\n# config\n"
+            ),
+        )
+        .unwrap();
+        for i in 0..num_pages {
+            std::fs::write(kb.join(format!("page-{i}.md")), format!("# Page {i}\n\nbody")).unwrap();
+        }
+        root
+    }
+
+    async fn mount_embedding_endpoints(server: &MockServer, dims: usize) {
+        // /v1/models for preflight.
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "test-model"}]
+            })))
+            .mount(server)
+            .await;
+        // /v1/embeddings returns a `dims`-length vector for every request.
+        let vec: Vec<f64> = vec![0.1; dims];
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"embedding": vec}]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn missing_collection_returns_err() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        let server = MockServer::start().await;
+        mount_embedding_endpoints(&server, EMBED_DIM).await;
+
+        // GET /collections/nlr_wiki → 404
+        Mock::given(method("GET"))
+            .and(path("/collections/nlr_wiki"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not found"))
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = make_vault(&tmp, 2);
+        std::env::set_var("EMBEDDING_API_URL", format!("{}/v1/embeddings", server.uri()));
+        std::env::set_var("EMBEDDING_MODEL", "test-model");
+
+        let result = embed_wiki(&root, &server.uri(), false).await;
+        assert!(
+            result.is_err(),
+            "expected embed_wiki to return Err when collection is missing, got {:?}",
+            result
+        );
+        let msg = format!("{:#}", result.err().unwrap());
+        assert!(msg.contains("nlr_wiki"), "error should mention collection: {msg}");
+        assert!(msg.contains("404"), "error should mention HTTP status: {msg}");
+    }
+
+    #[tokio::test]
+    async fn wrong_dimension_returns_err() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        let server = MockServer::start().await;
+        mount_embedding_endpoints(&server, EMBED_DIM).await;
+
+        // GET /collections/nlr_wiki returns a collection with size=1024
+        // (mismatch vs our 4096-dim embedder).
+        Mock::given(method("GET"))
+            .and(path("/collections/nlr_wiki"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "config": {
+                        "params": {
+                            "vectors": { "size": 1024, "distance": "Cosine" }
+                        }
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = make_vault(&tmp, 2);
+        std::env::set_var("EMBEDDING_API_URL", format!("{}/v1/embeddings", server.uri()));
+        std::env::set_var("EMBEDDING_MODEL", "test-model");
+
+        let result = embed_wiki(&root, &server.uri(), false).await;
+        assert!(
+            result.is_err(),
+            "expected Err when collection dim mismatches embedder; got {:?}",
+            result
+        );
+        let msg = format!("{:#}", result.err().unwrap());
+        assert!(msg.contains("1024"), "error should mention actual dim: {msg}");
+        assert!(msg.contains("4096"), "error should mention expected dim: {msg}");
+    }
+
+    #[tokio::test]
+    async fn happy_path_counts_successful_upserts() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        let server = MockServer::start().await;
+        mount_embedding_endpoints(&server, EMBED_DIM).await;
+
+        // GET /collections/nlr_wiki → matching dim.
+        Mock::given(method("GET"))
+            .and(path("/collections/nlr_wiki"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "config": {
+                        "params": {
+                            "vectors": { "size": EMBED_DIM, "distance": "Cosine" }
+                        }
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        // PUT /collections/nlr_wiki/points → 200 for each page.
+        Mock::given(method("PUT"))
+            .and(path_regex(r"^/collections/nlr_wiki/points$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": { "operation_id": 0, "status": "completed" },
+                "status": "ok",
+                "time": 0.0
+            })))
+            .mount(&server)
+            .await;
+
+        let num_pages = 3;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = make_vault(&tmp, num_pages);
+        std::env::set_var("EMBEDDING_API_URL", format!("{}/v1/embeddings", server.uri()));
+        std::env::set_var("EMBEDDING_MODEL", "test-model");
+
+        let count = embed_wiki(&root, &server.uri(), false).await.expect("happy path");
+        assert_eq!(count, num_pages, "all {num_pages} pages should count as embedded");
+    }
 }

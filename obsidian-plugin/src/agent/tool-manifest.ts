@@ -98,11 +98,21 @@ export class ToolManifestLoader {
   private async loadMcpTools(): Promise<LLMToolDefinition[]> {
     try {
       const raw = await this.opts.mcp.listTools();
+      // Belt-and-braces filter. The McpToolSource is expected to filter
+      // by allowed prefix upstream; this second filter protects the
+      // manifest if a caller wires a raw tools/list response in (legacy
+      // tests + the default stub). Accept `tv_*` (TurboVault) and
+      // `nlr_*` (neuro-link server) — the two namespaces the @neuro
+      // agent uses.
       return raw
-        .filter((t) => typeof t.name === "string" && t.name.startsWith("tv_"))
+        .filter(
+          (t) =>
+            typeof t.name === "string" &&
+            (t.name.startsWith("tv_") || t.name.startsWith("nlr_"))
+        )
         .map<LLMToolDefinition>((t) => ({
           name: t.name,
-          description: t.description ?? `TurboVault tool ${t.name}`,
+          description: t.description ?? `MCP tool ${t.name}`,
           parameters: t.inputSchema ?? { type: "object", properties: {} },
         }));
     } catch {

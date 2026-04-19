@@ -27,9 +27,11 @@ import {
   type AgentLLM,
 } from "../agent/neuro-agent";
 import { ToolManifestLoader, skillToolName } from "../agent/tool-manifest";
+import { McpToolSource } from "../agent/mcp-tool-source";
 import { SystemPromptLoader } from "../agent/system-prompt";
 import { VaultTraceLogger } from "../agent/trace-logger";
 import type { LLMToolCall, LLMMessage } from "../providers/base";
+import { VaultEventsClient } from "../mcp-vault-events";
 import * as path from "path";
 
 export const VIEW_TYPE_NEURO_CHAT = "nlr-neuro-chat-view";
@@ -43,6 +45,12 @@ export class NeuroChatView extends ItemView {
   private abortController: AbortController | null = null;
   private transcript: ChatMessage[] = [];
   private manifestLoader!: ToolManifestLoader;
+  private mcpSource!: McpToolSource;
+  // Dedicated VaultEventsClient for agent tool-call RPCs. Separate from
+  // `plugin.subscription` so the long-poll lifecycle doesn't entangle with
+  // the agent's request stream. Never `connect()`-ed — only the one-shot
+  // `callTool` / `listTools` methods are used.
+  private mcpClient!: VaultEventsClient;
   private promptLoader!: SystemPromptLoader;
   private trace!: VaultTraceLogger;
   private headerSubtitleEl: HTMLElement | null = null;
@@ -95,7 +103,13 @@ export class NeuroChatView extends ItemView {
       onStop: () => this.abortInFlight(),
     });
 
+    this.mcpClient = new VaultEventsClient(this.plugin, () => {
+      /* no-op — this instance is only used for one-shot tool calls */
+    });
+    this.mcpSource = new McpToolSource({ transport: this.mcpClient });
+
     this.manifestLoader = new ToolManifestLoader({
+      mcp: this.mcpSource,
       skills: {
         skillsDir: this.resolveSkillsDir(),
       },
@@ -308,12 +322,11 @@ export class NeuroChatView extends ItemView {
   /**
    * Execute a single tool call. Routes:
    *   - `run_skill_<skill>` → plugin.runNlrCommand(["skill", "run", ...])
-   *   - anything else → throw (the caller wraps into an "error" tool-result)
+   *   - `tv_*` / `nlr_*`   → McpToolSource.call() over JSON-RPC tools/call
+   *   - anything else      → throw (the caller wraps into a tool-result error)
    *
-   * Real MCP tool execution is intentionally *not* wired here yet — the
-   * MCP subscription client only provides subscribe/unsubscribe. Adding a
-   * generic tools/call over the same WebSocket is a follow-up; for now,
-   * tv_* calls surface as errors the agent can react to.
+   * Safety gates (checkWriteSafety in NeuroAgent.run) have already fired
+   * before this is invoked — a refused call never reaches the executor.
    */
   private async executeToolCall(call: LLMToolCall): Promise<unknown> {
     if (call.name.startsWith("run_skill_")) {
@@ -329,8 +342,24 @@ export class NeuroChatView extends ItemView {
       if (argStr.trim()) cliArgs.push("--args", argStr);
       return await this.plugin.runNlrCommand(cliArgs);
     }
+
+    // McpToolSource enforces the namespace prefix filter — a model-
+    // hallucinated tool name outside tv_*/nlr_* falls through to the
+    // generic throw rather than being dispatched as an RPC method.
+    if (call.name.startsWith("tv_") || call.name.startsWith("nlr_")) {
+      let parsedArgs: unknown;
+      try {
+        parsedArgs = JSON.parse(call.arguments || "{}");
+      } catch {
+        throw new Error(
+          `Tool '${call.name}' arguments are not valid JSON: ${call.arguments}`
+        );
+      }
+      return await this.mcpSource.call(call.name, parsedArgs);
+    }
+
     throw new Error(
-      `Tool '${call.name}' has no local executor. Connect the MCP transport or extend executeToolCall().`
+      `Tool '${call.name}' has no local executor. Only run_skill_*, tv_*, and nlr_* are dispatchable.`
     );
   }
 

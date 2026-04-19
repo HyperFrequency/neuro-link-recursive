@@ -25,7 +25,9 @@ import {
   coerceToHttpUrl,
   extractFetchResult,
   extractSubscribeResult,
+  extractToolNames,
   normaliseVaultEvent,
+  resolveEndpointUrl,
   VaultEventsClient,
   type VaultEvent,
 } from "../src/mcp-vault-events";
@@ -171,6 +173,100 @@ describe("coerceToHttpUrl", () => {
   });
 });
 
+// ── endpoint resolution (Codex finding #3) ────────────────────────────
+
+describe("resolveEndpointUrl", () => {
+  test("defaults to TurboVault :3001 when endpointUrl is unset", () => {
+    expect(
+      resolveEndpointUrl({ configured: "", turbovaultPort: 3001 })
+    ).toBe("http://localhost:3001/mcp");
+  });
+
+  test("honours a custom turbovaultPort when endpointUrl is unset", () => {
+    expect(
+      resolveEndpointUrl({ configured: "", turbovaultPort: 4567 })
+    ).toBe("http://localhost:4567/mcp");
+  });
+
+  test("falls back to :3001 when turbovaultPort is zero/undefined", () => {
+    expect(
+      resolveEndpointUrl({ configured: "", turbovaultPort: 0 })
+    ).toBe("http://localhost:3001/mcp");
+    expect(
+      resolveEndpointUrl({ configured: "", turbovaultPort: undefined })
+    ).toBe("http://localhost:3001/mcp");
+  });
+
+  test("an explicitly-set endpointUrl overrides the default", () => {
+    expect(
+      resolveEndpointUrl({
+        configured: "http://remote.example.com:9000/mcp",
+        turbovaultPort: 3001,
+      })
+    ).toBe("http://remote.example.com:9000/mcp");
+  });
+
+  test("explicit endpointUrl wins even when it still points at :8080", () => {
+    // Back-compat: if a user already set their endpoint to the neuro-link
+    // API router and wants to keep it (e.g. they run TurboVault behind the
+    // same port for some reason), we honour their override.
+    expect(
+      resolveEndpointUrl({
+        configured: "http://localhost:8080/mcp",
+        turbovaultPort: 3001,
+      })
+    ).toBe("http://localhost:8080/mcp");
+  });
+
+  test("legacy ws:// URLs are coerced through coerceToHttpUrl", () => {
+    // Exercises the "user skipped migration but kept ws://" path —
+    // resolveEndpointUrl must still produce a usable HTTP URL.
+    expect(
+      resolveEndpointUrl({
+        configured: "ws://localhost:3001/mcp/ws",
+        turbovaultPort: 3001,
+      })
+    ).toBe("http://localhost:3001/mcp");
+    expect(
+      resolveEndpointUrl({
+        configured: "wss://example.com/mcp/ws",
+        turbovaultPort: 3001,
+      })
+    ).toBe("https://example.com/mcp");
+  });
+});
+
+describe("extractToolNames", () => {
+  test("reads direct tools array", () => {
+    expect(
+      extractToolNames({
+        tools: [{ name: "subscribe_vault_events" }, { name: "unrelated" }],
+      })
+    ).toEqual(["subscribe_vault_events", "unrelated"]);
+  });
+
+  test("unwraps MCP content envelope", () => {
+    expect(
+      extractToolNames({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              tools: [{ name: "fetch_vault_events" }],
+            }),
+          },
+        ],
+      })
+    ).toEqual(["fetch_vault_events"]);
+  });
+
+  test("returns [] on malformed shapes", () => {
+    expect(extractToolNames(null)).toEqual([]);
+    expect(extractToolNames({})).toEqual([]);
+    expect(extractToolNames({ tools: "not-an-array" })).toEqual([]);
+  });
+});
+
 // ── end-to-end client tests ───────────────────────────────────────────
 
 type FetchCall = {
@@ -184,6 +280,7 @@ function buildClient(opts: {
   nextResponses: Array<ResponseLike | (() => ResponseLike | Promise<ResponseLike>)>;
   dispatcherGlob?: string;
   endpointUrl?: string;
+  turbovaultPort?: number;
 }): {
   plugin: PluginStub;
   calls: FetchCall[];
@@ -198,6 +295,7 @@ function buildClient(opts: {
   const plugin: PluginStub = {
     settings: {
       apiRouterPort: 8080,
+      turbovaultPort: opts.turbovaultPort ?? 3001,
       nlrRoot: "",
       subscription: {
         enabled: true,
@@ -308,15 +406,38 @@ afterEach(() => {
   globalThis.fetch = lastFetch;
 });
 
+/**
+ * Pre-canned `tools/list` response that advertises the three vault-event
+ * tools. Existing tests prepend this so the capability probe (added for
+ * Codex finding #3) passes before subscribe is attempted.
+ */
+function toolsListOk(id = 0): ResponseLike {
+  return {
+    status: 200,
+    json: {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        tools: [
+          { name: "subscribe_vault_events" },
+          { name: "fetch_vault_events" },
+          { name: "unsubscribe_vault_events" },
+        ],
+      },
+    },
+  };
+}
+
 describe("VaultEventsClient.subscribe", () => {
   test("test_subscribe_succeeds: POST body shape + handle stored", async () => {
     const { client, calls } = buildClient({
       nextResponses: [
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "sub-42", created_at: "2026-04-17T00:00:00Z" },
           },
         },
@@ -325,11 +446,17 @@ describe("VaultEventsClient.subscribe", () => {
     });
 
     await client.connect();
-    // Wait for subscribe + first long-poll to be issued.
-    await waitForFetchCalls(calls, 2);
+    // Wait for probe + subscribe + first long-poll to be issued.
+    await waitForFetchCalls(calls, 3);
     await client.disconnect();
 
-    const subCall = calls[0];
+    // First call is the capability probe (tools/list).
+    const probeCall = calls[0];
+    expect(probeCall.url).toBe("http://localhost:8080/mcp");
+    expect(probeCall.body.method).toBe("tools/list");
+
+    // Second call is the actual subscribe.
+    const subCall = calls[1];
     expect(subCall.url).toBe("http://localhost:8080/mcp");
     expect(subCall.body.method).toBe("tools/call");
     const params = subCall.body.params as { name: string; arguments: unknown };
@@ -357,11 +484,12 @@ describe("VaultEventsClient.longPoll", () => {
   test("test_long_poll_loop_emits_events: two events emitted in order", async () => {
     const { client, events } = buildClient({
       nextResponses: [
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "h", created_at: null },
           },
         },
@@ -369,7 +497,7 @@ describe("VaultEventsClient.longPoll", () => {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 2,
+            id: 3,
             result: {
               events: [
                 { seq: 1, event: { kind: "FileCreated", path: "one.md" } },
@@ -395,11 +523,12 @@ describe("VaultEventsClient.longPoll", () => {
   test("test_long_poll_respects_since_seq: cursor threads across calls", async () => {
     const { client, calls } = buildClient({
       nextResponses: [
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "h", created_at: null },
           },
         },
@@ -407,7 +536,7 @@ describe("VaultEventsClient.longPoll", () => {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 2,
+            id: 3,
             result: {
               events: [{ seq: 10, event: { kind: "FileCreated", path: "a.md" } }],
               next_seq: 10,
@@ -419,7 +548,7 @@ describe("VaultEventsClient.longPoll", () => {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 3,
+            id: 4,
             result: {
               events: [{ seq: 17, event: { kind: "FileCreated", path: "b.md" } }],
               next_seq: 17,
@@ -432,8 +561,8 @@ describe("VaultEventsClient.longPoll", () => {
     });
 
     await client.connect();
-    // Wait for subscribe + 2 fetches + 1 parked call = 4 total.
-    await waitForFetchCalls(calls, 4);
+    // Wait for probe + subscribe + 2 fetches + 1 parked call = 5 total.
+    await waitForFetchCalls(calls, 5);
     await client.disconnect();
 
     const fetchCalls = calls.filter(
@@ -452,11 +581,12 @@ describe("VaultEventsClient.longPoll", () => {
   test("test_overflow_event_on_dropped: synthetic Overflow when dropped > 0", async () => {
     const { client, events } = buildClient({
       nextResponses: [
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "h", created_at: null },
           },
         },
@@ -464,7 +594,7 @@ describe("VaultEventsClient.longPoll", () => {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 2,
+            id: 3,
             result: {
               events: [{ seq: 5, event: { kind: "FileCreated", path: "c.md" } }],
               next_seq: 5,
@@ -489,9 +619,11 @@ describe("VaultEventsClient.longPoll", () => {
 });
 
 describe("VaultEventsClient.errorHandling", () => {
-  test("test_auth_error_terminal: 401 during subscribe → terminal, no retry", async () => {
+  test("test_auth_error_terminal: 401 during probe → terminal, no retry", async () => {
     const { client, calls, events } = buildClient({
       nextResponses: [
+        // The capability probe (added for Codex finding #3) is the first
+        // call out; if the server rejects auth on it, subscribe never runs.
         { status: 401, json: {} },
         // Scripted only once — if the client retried we'd hit the parked
         // branch and the test would time out on the disconnect instead of
@@ -505,11 +637,9 @@ describe("VaultEventsClient.errorHandling", () => {
     await new Promise((r) => setTimeout(r, 100));
     await client.disconnect();
 
-    // Exactly one subscribe attempt; no fetch issued.
+    // Exactly one attempt — the probe. No subscribe issued.
     expect(calls.length).toBe(1);
-    expect(
-      (calls[0].body.params as { name: string }).name
-    ).toBe("subscribe_vault_events");
+    expect(calls[0].body.method).toBe("tools/list");
 
     // Terminal marker emitted so consumers can render dead state.
     const terminal = events.find(
@@ -521,11 +651,12 @@ describe("VaultEventsClient.errorHandling", () => {
   test("test_transient_error_exponential_backoff: first retry ~1s", async () => {
     const { client, calls } = buildClient({
       nextResponses: [
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "h", created_at: null },
           },
         },
@@ -536,7 +667,7 @@ describe("VaultEventsClient.errorHandling", () => {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 3,
+            id: 4,
             result: { events: [], next_seq: 0, dropped: 0 },
           },
         },
@@ -546,8 +677,8 @@ describe("VaultEventsClient.errorHandling", () => {
 
     const started = Date.now();
     await client.connect();
-    // Wait until we've seen subscribe + failed fetch + recovery fetch + next parked = 4 calls.
-    await waitForFetchCalls(calls, 4);
+    // Wait until we've seen probe + subscribe + failed fetch + recovery fetch + next parked = 5 calls.
+    await waitForFetchCalls(calls, 5);
     const elapsed = Date.now() - started;
     await client.disconnect();
 
@@ -559,11 +690,13 @@ describe("VaultEventsClient.errorHandling", () => {
 
   test("test_abort_during_long_poll: abort signals the in-flight fetch", async () => {
     // The mock fetch below resolves only when the abort signal fires, so
-    // the subscribe call doesn't complete naturally — the only way the
+    // the first call doesn't complete naturally — the only way the
     // test exits the `connect()` await is if disconnect() aborts it.
+    // With the Codex-#3 capability probe, the first call out is
+    // `tools/list` rather than subscribe.
     const { client, calls, plugin } = buildClient({
       nextResponses: [
-        // subscribe hangs until abort signal.
+        // probe hangs until abort signal.
         () =>
           new Promise<ResponseLike>((resolve, reject) => {
             // Wait a tick so `calls[0]` is populated with the AbortSignal.
@@ -584,27 +717,26 @@ describe("VaultEventsClient.errorHandling", () => {
     });
 
     const connectPromise = client.connect();
-    // Give the subscribe call a moment to be issued.
+    // Give the first call a moment to be issued.
     await new Promise((r) => setTimeout(r, 20));
     const disc = client.disconnect();
     await connectPromise;
     await disc;
 
     expect(calls.length).toBe(1);
-    expect((calls[0].body.params as { name: string }).name).toBe(
-      "subscribe_vault_events"
-    );
+    expect(calls[0].body.method).toBe("tools/list");
     void plugin; // silence unused var lint
   });
 
   test("test_unsubscribe_on_shutdown: clean teardown calls unsubscribe", async () => {
     const { client, calls } = buildClient({
       nextResponses: [
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "sub-shutdown", created_at: null },
           },
         },
@@ -614,7 +746,7 @@ describe("VaultEventsClient.errorHandling", () => {
     });
 
     await client.connect();
-    await waitForFetchCalls(calls, 2); // subscribe + parked long-poll
+    await waitForFetchCalls(calls, 3); // probe + subscribe + parked long-poll
     await client.disconnect();
 
     const unsub = calls.find(
@@ -626,11 +758,89 @@ describe("VaultEventsClient.errorHandling", () => {
   });
 });
 
+// ── capability probe (Codex finding #3) ───────────────────────────────
+
+describe("VaultEventsClient.capabilityProbe", () => {
+  test("test_probe_missing_vault_events_terminal: wrong endpoint → terminal, no subscribe", async () => {
+    // Simulate the exact scenario Codex flagged: the pull transport
+    // defaulted to the neuro-link API router on :8080, which answers
+    // tools/list with `nlr_*` tools only. That must fail fast rather
+    // than loop on subscribe_vault_events forever.
+    const { client, calls, events } = buildClient({
+      nextResponses: [
+        {
+          status: 200,
+          json: {
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              tools: [
+                { name: "nlr_wiki_read" },
+                { name: "nlr_task_create" },
+                { name: "nlr_scan_health" },
+              ],
+            },
+          },
+        },
+        // No further responses — if the client incorrectly attempts
+        // subscribe, the mock parks on abort and the test times out.
+      ],
+    });
+
+    await client.connect();
+    // Generous window for the terminal Notice/Overflow to propagate.
+    await waitForEvents(events, 1, 2_000);
+    await client.disconnect();
+
+    // Exactly one call — the probe. No subscribe was issued.
+    expect(calls.length).toBe(1);
+    expect(calls[0].body.method).toBe("tools/list");
+    const subscribeCall = calls.find(
+      (c) => (c.body.params as { name?: string }).name === "subscribe_vault_events"
+    );
+    expect(subscribeCall).toBeUndefined();
+
+    // Terminal marker emitted so the plugin can render "dead" state.
+    const terminal = events.find(
+      (e) => e.kind === "Overflow" && e.path === "<terminal>"
+    );
+    expect(terminal).toBeDefined();
+  });
+
+  test("test_probe_success_proceeds_to_subscribe: happy path", async () => {
+    // Sanity check: when the server advertises the required tools, the
+    // probe passes silently and we proceed straight to subscribe.
+    const { client, calls } = buildClient({
+      nextResponses: [
+        toolsListOk(1),
+        {
+          status: 200,
+          json: {
+            jsonrpc: "2.0",
+            id: 2,
+            result: { handle: "sub-ok", created_at: null },
+          },
+        },
+      ],
+    });
+
+    await client.connect();
+    await waitForFetchCalls(calls, 3); // probe + subscribe + parked long-poll
+    await client.disconnect();
+
+    expect(calls[0].body.method).toBe("tools/list");
+    expect(
+      (calls[1].body.params as { name: string }).name
+    ).toBe("subscribe_vault_events");
+  });
+});
+
 // ── utility helpers ───────────────────────────────────────────────────
 
 interface PluginStub {
   settings: {
     apiRouterPort: number;
+    turbovaultPort: number;
     nlrRoot: string;
     subscription: { enabled: boolean; endpointUrl: string };
     dispatcher: { watchGlob: string };

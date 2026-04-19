@@ -623,11 +623,13 @@ describe("VaultEventsClient.longPoll", () => {
   test("test_last_successful_fetch_timestamp: getter updates after each success", async () => {
     const { client, events } = buildClient({
       nextResponses: [
+        // Capability probe (Codex finding #3) — runs before subscribe.
+        toolsListOk(1),
         {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 1,
+            id: 2,
             result: { handle: "h", created_at: null },
           },
         },
@@ -635,7 +637,7 @@ describe("VaultEventsClient.longPoll", () => {
           status: 200,
           json: {
             jsonrpc: "2.0",
-            id: 2,
+            id: 3,
             result: {
               events: [{ seq: 1, event: { kind: "FileCreated", path: "a.md" } }],
               next_seq: 1,

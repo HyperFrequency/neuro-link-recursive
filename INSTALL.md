@@ -28,7 +28,7 @@ The installer orchestrates 12 steps. Everything it does delegates to a purpose-b
 |---|---|---|---|
 | 1 | Prereqs | Runs `check_prereqs.sh` — Rust ≥1.90, Python 3.11+, Node 20+/Bun, Docker, llama-server, huggingface-cli, ngrok, caddy, gh, jq | Yes — read-only probe |
 | 2 | Vault structure | Runs `verify_vault_structure.sh`; auto-creates any missing directories via `mkdir -p` | Yes |
-| 3 | TurboVault | `cargo install --git https://github.com/ahuserious/turbovault --features full` | Yes — cargo skips if up-to-date |
+| 3 | TurboVault | `cargo install --force --git https://github.com/ahuserious/turbovault --features full --locked`; verifies provenance via `~/.cargo/.crates.toml` and probes `turbovault --help` for `subscribe_vault_events` before trusting an existing install — a stock crates.io `turbovault` will be reinstalled from the fork | Yes — cargo skips if up-to-date |
 | 4 | Rust server build | `cd server && cargo build --release` | Yes — cargo incremental |
 | 5 | Obsidian plugin | `cd obsidian-plugin && bun install && bun run build` (falls back to npm) | Yes |
 | 6 | Secrets | Generates `secrets/.env` from `.env.example`; mints `NLR_API_TOKEN` only if absent | Yes — never overwrites |
@@ -54,6 +54,9 @@ A final optional step only runs with `--with-tunnel`:
                             hybrid — per-service, edit config/neuro-link.md after install
 --dry-run                   Print what would happen without executing anything
 --with-tunnel               After verification, start the public tunnel in foreground
+--force-turbovault          Force reinstall of turbovault from the fork even
+                            if a binary is already present (use when a
+                            crates.io install is masking the fork)
 -h, --help                  Show usage
 ```
 
@@ -105,7 +108,8 @@ Each `install.sh` step that fails prints the exact command to reproduce the fail
 
 | Symptom | Fix |
 |---|---|
-| `cargo install turbovault` fails | `cd /tmp && cargo install --git https://github.com/ahuserious/turbovault --features full -v` — verbose output shows the real error |
+| `cargo install turbovault` fails | `cd /tmp && cargo install --force --git https://github.com/ahuserious/turbovault --features full --locked -v` — verbose output shows the real error |
+| Installer says "provenance is NOT the fork" | A stock `cargo install turbovault` (crates.io) is masking the fork. Re-run `./install.sh --force-turbovault` to overwrite it, or `cargo uninstall turbovault` first. |
 | `cargo build --release` in `server/` fails | `cd server && cargo build --release -v` |
 | `docker compose up` fails with "daemon not running" | macOS: `open -a Docker` then wait 30s; Linux: `sudo systemctl start docker` |
 | `huggingface-cli download` hangs / 401 | Add `HF_TOKEN` to `secrets/.env` then re-run `bash .claude/skills/neuro-link-setup/scripts/download_models.sh` |

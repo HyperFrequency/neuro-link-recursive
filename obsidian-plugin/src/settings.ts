@@ -56,7 +56,10 @@ export interface SubscriptionSettings {
   enabled: boolean;
   /**
    * HTTP base URL of the MCP endpoint the vault-events client talks to.
-   * Empty = auto-derive from `apiRouterPort` (→ `http://localhost:<port>/mcp`).
+   * Empty = auto-derive from `turbovaultPort` (→ `http://localhost:<port>/mcp`).
+   *
+   * The vault-event tools live on TurboVault, not on the neuro-link API
+   * router — the default therefore points at :3001, not :8080.
    *
    * Legacy field: prior schemas called this `wsUrl` and stored
    * `ws://.../mcp/ws`. `migrateSettings` rewrites `ws(s)://` to `http(s)://`
@@ -110,6 +113,15 @@ export interface NLRSettings {
   mcpServerMode: string;
   mcp2cliProfilePath: string;
   apiRouterPort: number;
+  /**
+   * HTTP port the TurboVault MCP server listens on. TurboVault owns the
+   * `subscribe_vault_events` / `fetch_vault_events` /
+   * `unsubscribe_vault_events` tools — they are NOT exposed by the
+   * neuro-link API router on `apiRouterPort`. The vault-events client
+   * defaults its endpoint to `http://localhost:<turbovaultPort>/mcp` when
+   * `subscription.endpointUrl` is blank.
+   */
+  turbovaultPort: number;
   ngrokDomain: string;
   sessionLogging: boolean;
   scoreHistory: boolean;
@@ -150,6 +162,7 @@ export const DEFAULT_SETTINGS: NLRSettings = {
   mcpServerMode: "stdio",
   mcp2cliProfilePath: "",
   apiRouterPort: 8080,
+  turbovaultPort: 3001,
   ngrokDomain: "",
   sessionLogging: true,
   scoreHistory: true,
@@ -563,10 +576,12 @@ export class NLRSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("MCP endpoint URL")
-      .setDesc("Leave blank to auto-derive from API Router Port")
+      .setDesc(
+        "Vault-events pull endpoint (TurboVault). Leave blank to auto-derive from TurboVault Port."
+      )
       .addText((text) =>
         text
-          .setPlaceholder(`http://localhost:${this.plugin.settings.apiRouterPort}/mcp`)
+          .setPlaceholder(`http://localhost:${this.plugin.settings.turbovaultPort}/mcp`)
           .setValue(s.endpointUrl)
           .onChange(async (v) => {
             s.endpointUrl = v.trim();
@@ -903,6 +918,23 @@ export class NLRSettingTab extends PluginSettingTab {
             const parsed = parseInt(value, 10);
             if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
               this.plugin.settings.apiRouterPort = parsed;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("TurboVault Port")
+      .setDesc(
+        "Port the TurboVault MCP server listens on. Serves vault-event subscriptions (subscribe_vault_events, fetch_vault_events, unsubscribe_vault_events)."
+      )
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.turbovaultPort))
+          .onChange(async (value) => {
+            const parsed = parseInt(value, 10);
+            if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
+              this.plugin.settings.turbovaultPort = parsed;
               await this.plugin.saveSettings();
             }
           })

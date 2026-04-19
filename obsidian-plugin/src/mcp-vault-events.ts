@@ -24,6 +24,7 @@
  */
 
 import type NLRPlugin from "./main";
+import { Notice } from "obsidian";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -66,6 +67,21 @@ interface JSONRPCResponse {
   result?: unknown;
   error?: { code: number; message: string; data?: unknown };
 }
+
+/**
+ * Fallback port when `turbovaultPort` is missing/zero. The vault-event
+ * tools live on TurboVault, not the neuro-link API router (:8080, which
+ * exposes `nlr_*` only and returns method-not-found for
+ * `subscribe_vault_events`).
+ */
+const DEFAULT_TURBOVAULT_PORT = 3001;
+
+/** Server must expose all three for a full subscribe lifecycle. */
+const REQUIRED_VAULT_EVENT_TOOLS = [
+  "subscribe_vault_events",
+  "fetch_vault_events",
+  "unsubscribe_vault_events",
+] as const;
 
 /** Exponential backoff schedule from the spec: 1s, 2s, 4s, 16s, cap 30s. */
 const BACKOFF_SCHEDULE_MS = [1_000, 2_000, 4_000, 16_000, 30_000];
@@ -127,6 +143,28 @@ export class VaultEventsClient {
    */
   async connect(): Promise<void> {
     if (this.stopped || this.terminated) return;
+
+    // Capability probe before we spend retry budget on subscribe. The
+    // wrong endpoint (e.g. the neuro-link API router on :8080, which
+    // exposes `nlr_*` only) would otherwise produce an infinite
+    // method-not-found loop that masks a misconfiguration. Transient
+    // network failures here are NOT terminal — fall through to the
+    // long-poll loop where the backoff ladder handles reconnects.
+    try {
+      await this.probeCapabilities();
+    } catch (e) {
+      const err = e as Error & { code?: number; status?: number };
+      if (isAuthError(err)) {
+        this.terminate(`tools/list auth-rejected: ${err.message}`);
+        return;
+      }
+      if (err instanceof WrongEndpointError) {
+        this.terminate(err.message);
+        return;
+      }
+      console.warn(`NLR vault-events: probe failed (transient) — ${err.message}`);
+    }
+    if (this.terminated || this.stopped) return;
 
     try {
       await this.subscribe();
@@ -193,6 +231,45 @@ export class VaultEventsClient {
   }
 
   // ── internal: subscribe + long-poll loop ───────────────────────────────
+
+  /**
+   * One-shot `tools/list` call. Throws `WrongEndpointError` when the
+   * server does not advertise the vault-event tool set — the signature
+   * of hitting the wrong MCP endpoint (e.g. the neuro-link API router,
+   * which exposes `nlr_*` only). Transient errors propagate for the
+   * caller to treat as backoff-worthy.
+   */
+  private async probeCapabilities(): Promise<void> {
+    // Track the probe through `this.inflight` so `disconnect()` can abort
+    // it during a stuck connect handshake. (The one-shot
+    // `callTool`/`listTools` executor path uses `issueRpc` instead — it's
+    // bound to plugin lifetime, not the subscription lifecycle.)
+    const controller = new AbortController();
+    this.inflight = controller;
+    let result: unknown;
+    try {
+      result = await this.postJsonRpc({
+        controller,
+        method: "tools/list",
+        params: {},
+        timeoutMs: 5_000,
+      });
+    } finally {
+      if (this.inflight === controller) this.inflight = null;
+    }
+    const names = extractToolNames(result);
+    const missing = REQUIRED_VAULT_EVENT_TOOLS.filter(
+      (t) => !names.includes(t)
+    );
+    if (missing.length === 0) return;
+
+    const url = this.resolveEndpointUrl();
+    throw new WrongEndpointError(
+      `MCP endpoint ${url} does not expose vault-event tools ` +
+        `(missing: ${missing.join(", ")}). Point "MCP endpoint URL" at the ` +
+        `TurboVault server (default http://localhost:${DEFAULT_TURBOVAULT_PORT}/mcp).`
+    );
+  }
 
   private async subscribe(): Promise<void> {
     const watchGlob = this.plugin.settings.dispatcher.watchGlob;
@@ -339,6 +416,10 @@ export class VaultEventsClient {
       this.inflight = null;
     }
     console.warn(`NLR vault-events: terminal — ${reason}`);
+    // Surface terminal errors in the Obsidian UI so misconfiguration
+    // (wrong endpoint, bad token) is visible instead of a silent retry
+    // loop. 10s matches the UI pattern used by `syncLegacyApiKeys`.
+    new Notice(`Neuro-Link vault-events: ${reason}`, 10_000);
     // Emit a synthetic event so the dispatcher can mark the subscription
     // as dead in UI without a separate callback.
     void this.emit({
@@ -374,6 +455,13 @@ export class VaultEventsClient {
     } finally {
       if (this.inflight === controller) this.inflight = null;
     }
+  }
+
+  private resolveEndpointUrl(): string {
+    return resolveEndpointUrl({
+      configured: this.plugin.settings.subscription.endpointUrl,
+      turbovaultPort: this.plugin.settings.turbovaultPort,
+    });
   }
 
   /**
@@ -428,17 +516,6 @@ export class VaultEventsClient {
     }
   }
 
-  private resolveEndpointUrl(): string {
-    // `migrateSettings` handles the `wsUrl` → `endpointUrl` rename and
-    // the `ws(s)://` → `http(s)://` rewrite. `coerceToHttpUrl` is
-    // belt-and-braces for users who hand-edit the data.json between
-    // releases and skip the migration path.
-    const configured = this.plugin.settings.subscription.endpointUrl;
-    if (configured) return coerceToHttpUrl(configured);
-    const port = this.plugin.settings.apiRouterPort || 8080;
-    return `http://localhost:${port}/mcp`;
-  }
-
   private readBearerToken(): string {
     // Source of truth: secrets/.env — same NLR_API_TOKEN the rest of the
     // plugin uses. See mcp-setup.ts for the canonical pattern.
@@ -491,6 +568,71 @@ export class VaultEventsClient {
 }
 
 // ── helpers (exported for tests) ───────────────────────────────────────
+
+/**
+ * Raised by `probeCapabilities` when the MCP server answers `tools/list`
+ * but does not advertise the vault-event tool set. The caller treats this
+ * as terminal (wrong endpoint, not transient network flake).
+ */
+export class WrongEndpointError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WrongEndpointError";
+  }
+}
+
+/**
+ * Pure URL-resolution helper. Extracted from the class so tests can
+ * assert the mapping without spinning up a VaultEventsClient.
+ *
+ * Precedence: explicit `configured` overrides everything (coerced through
+ * `coerceToHttpUrl` to handle legacy `ws://` entries that skipped the
+ * settings migration). Otherwise default to the TurboVault port.
+ */
+export function resolveEndpointUrl(opts: {
+  configured: string | undefined;
+  turbovaultPort: number | undefined;
+}): string {
+  if (opts.configured && opts.configured.length > 0) {
+    return coerceToHttpUrl(opts.configured);
+  }
+  const port = opts.turbovaultPort || DEFAULT_TURBOVAULT_PORT;
+  return `http://localhost:${port}/mcp`;
+}
+
+/**
+ * Pull tool names out of an MCP `tools/list` result. The canonical shape
+ * is `{ tools: [{ name, ... }, ...] }`; some servers wrap it in the
+ * standard MCP `content[]` text envelope, so we accept both.
+ */
+export function extractToolNames(result: unknown): string[] {
+  if (!result || typeof result !== "object") return [];
+
+  const direct = (result as { tools?: unknown }).tools;
+  if (Array.isArray(direct)) {
+    return direct
+      .map((t) => (t as { name?: unknown })?.name)
+      .filter((n): n is string => typeof n === "string");
+  }
+
+  const content = (result as { content?: Array<{ text?: string }> }).content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (typeof block?.text !== "string") continue;
+      try {
+        const parsed = JSON.parse(block.text) as { tools?: unknown };
+        if (Array.isArray(parsed.tools)) {
+          return parsed.tools
+            .map((t) => (t as { name?: unknown })?.name)
+            .filter((n): n is string => typeof n === "string");
+        }
+      } catch {
+        /* not JSON — try next block */
+      }
+    }
+  }
+  return [];
+}
 
 interface FetchPage {
   events: Array<{ seq: number; event: unknown }>;

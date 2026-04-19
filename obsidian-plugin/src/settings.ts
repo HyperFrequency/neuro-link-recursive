@@ -20,7 +20,15 @@ import { ProviderId } from "./providers/base";
 
 const execFileAsync = promisify(execFile);
 
-export const SETTINGS_SCHEMA_VERSION = 3;
+export const SETTINGS_SCHEMA_VERSION = 4;
+
+/**
+ * The legacy default path the dispatcher wrote task specs to prior to
+ * schema v4. Kept as a constant so `migrateSettings` can detect users who
+ * never overrode the default and transparently move them to the canonical
+ * `07-neuro-link-task` folder the server watcher reads from.
+ */
+const LEGACY_TASK_OUTPUT_DIR = "00-neuro-link/tasks";
 
 export interface DispatcherSettings {
   /** Master switch for the file-drop → task-spec pipeline. */
@@ -38,7 +46,7 @@ export interface DispatcherSettings {
 export const DEFAULT_DISPATCHER_SETTINGS: DispatcherSettings = {
   enabled: true,
   watchGlob: "00-neuro-link/*.md",
-  taskOutputDir: "00-neuro-link/tasks",
+  taskOutputDir: "07-neuro-link-task",
   debounceMs: 500,
   model: "",
 };
@@ -184,11 +192,28 @@ export function migrateSettings(raw: Partial<NLRSettings>): NLRSettings {
     ...raw,
     apiKeys: { ...(raw.apiKeys || {}) },
     llm: mergeLLMSettings(safeLlm, raw.apiKeys || {}),
-    dispatcher: { ...DEFAULT_DISPATCHER_SETTINGS, ...(raw.dispatcher || {}) },
+    dispatcher: migrateDispatcherSettings(raw.dispatcher),
     subscription: migrateSubscriptionSettings(raw.subscription),
     chatPanel: { ...DEFAULT_CHAT_PANEL_SETTINGS, ...(raw.chatPanel || {}) },
     schemaVersion: SETTINGS_SCHEMA_VERSION,
   };
+  return merged;
+}
+
+/**
+ * Handle the v3 → v4 task-queue path rename. Prior to v4 the dispatcher
+ * defaulted to writing task specs under `00-neuro-link/tasks/`, but the
+ * server-side watcher dispatches from `07-neuro-link-task/`. Any install
+ * still on the old default is silently migrated; a user who intentionally
+ * overrode `taskOutputDir` to a different folder keeps their override.
+ */
+function migrateDispatcherSettings(
+  raw: Partial<DispatcherSettings> | undefined
+): DispatcherSettings {
+  const merged: DispatcherSettings = { ...DEFAULT_DISPATCHER_SETTINGS, ...(raw || {}) };
+  if (merged.taskOutputDir === LEGACY_TASK_OUTPUT_DIR) {
+    merged.taskOutputDir = DEFAULT_DISPATCHER_SETTINGS.taskOutputDir;
+  }
   return merged;
 }
 
@@ -465,7 +490,7 @@ export class NLRSettingTab extends PluginSettingTab {
   private renderDispatcherSection(containerEl: HTMLElement): void {
     containerEl.createEl("h2", { text: "File-drop Task Dispatcher" });
     containerEl.createEl("p", {
-      text: "On FileCreated under 00-neuro-link/ (top-level only), read frontmatter+body, call the primary LLM, and write a task spec under 00-neuro-link/tasks/.",
+      text: "On FileCreated under 00-neuro-link/ (top-level only), read frontmatter+body, call the primary LLM, and write a task spec under 07-neuro-link-task/.",
       cls: "setting-item-description",
     });
 

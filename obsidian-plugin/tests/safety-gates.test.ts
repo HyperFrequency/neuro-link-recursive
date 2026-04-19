@@ -10,7 +10,7 @@ describe("isAllowed", () => {
   test("allows paths matching the default globs", () => {
     expect(isAllowed("01-raw/foo.pdf", DEFAULT_ALLOWED_PATHS)).toBe(true);
     expect(isAllowed("02-KB-main/topic.md", DEFAULT_ALLOWED_PATHS)).toBe(true);
-    expect(isAllowed("00-neuro-link/tasks/x.md", DEFAULT_ALLOWED_PATHS)).toBe(true);
+    expect(isAllowed("07-neuro-link-task/x.md", DEFAULT_ALLOWED_PATHS)).toBe(true);
     expect(isAllowed("04-Agent-Memory/logs.md", DEFAULT_ALLOWED_PATHS)).toBe(true);
     expect(isAllowed("08-code-docs/api.md", DEFAULT_ALLOWED_PATHS)).toBe(true);
   });

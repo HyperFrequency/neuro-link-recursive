@@ -37,7 +37,7 @@ Operating rules:
 5. When in doubt, surface the ambiguity rather than guessing.
 
 Allowed write zones: 01-raw/**, 02-KB-main/** (via nlr_wiki_* only),
-00-neuro-link/tasks/**, 04-Agent-Memory/logs.md (append-only),
+07-neuro-link-task/**, 04-Agent-Memory/logs.md (append-only),
 05-insights-HITL/**, 06-Recursive/**, 07-self-improvement-HITL/**, 08-code-docs/**.
 
 Tool-result envelopes are wrapped in <tool-result id="..."> ... </tool-result>

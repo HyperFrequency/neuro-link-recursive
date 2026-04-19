@@ -59,7 +59,7 @@ const WRITE_TOOL_PATH_KEYS = [
 export const DEFAULT_ALLOWED_PATHS: readonly string[] = Object.freeze([
   "01-raw/**",
   "02-KB-main/**",
-  "00-neuro-link/tasks/**",
+  "07-neuro-link-task/**",
   "04-Agent-Memory/logs.md",
   "05-insights-HITL/**",
   "06-Recursive/**",

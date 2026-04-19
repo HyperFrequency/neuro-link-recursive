@@ -183,7 +183,7 @@ describe("NewSpecDispatcher — stale-content race", () => {
         dispatcher: {
           enabled: true,
           watchGlob: "00-neuro-link/*.md",
-          taskOutputDir: "00-neuro-link/tasks",
+          taskOutputDir: "07-neuro-link-task",
           debounceMs: 0,
           model: "test-model",
         },
@@ -195,7 +195,7 @@ describe("NewSpecDispatcher — stale-content race", () => {
           getAbstractFileByPath: (p: string): unknown => {
             // Return the TFile stub for the source and null for the task
             // output target (so writeTaskSpec's "already exists" loop is happy).
-            if (p.startsWith("00-neuro-link/tasks/")) return null;
+            if (p.startsWith("07-neuro-link-task/")) return null;
             return mockFile;
           },
           read: async (_f: unknown): Promise<string> => currentRead(),
@@ -261,7 +261,7 @@ describe("NewSpecDispatcher — stale-content race", () => {
     );
 
     expect(runs.length).toBe(1);
-    expect(runs[0].path).toBe("00-neuro-link/tasks/do-thing.md");
+    expect(runs[0].path).toBe("07-neuro-link-task/do-thing.md");
     expect(runs[0].body).toContain("Do thing");
   });
 
@@ -286,7 +286,7 @@ describe("NewSpecDispatcher — stale-content race", () => {
         dispatcher: {
           enabled: true,
           watchGlob: "00-neuro-link/*.md",
-          taskOutputDir: "00-neuro-link/tasks",
+          taskOutputDir: "07-neuro-link-task",
           debounceMs: 0,
           model: "test-model",
         },
@@ -296,7 +296,7 @@ describe("NewSpecDispatcher — stale-content race", () => {
       app: {
         vault: {
           getAbstractFileByPath: (p: string): unknown =>
-            p.startsWith("00-neuro-link/tasks/") ? null : mockFile,
+            p.startsWith("07-neuro-link-task/") ? null : mockFile,
           read: async (): Promise<string> => rotating(),
           create: async (p: string, body: string): Promise<void> => {
             runs.push({ path: p, body });
@@ -364,7 +364,7 @@ describe("NewSpecDispatcher — slug collision under concurrency", () => {
         dispatcher: {
           enabled: true,
           watchGlob: "00-neuro-link/*.md",
-          taskOutputDir: "00-neuro-link/tasks",
+          taskOutputDir: "07-neuro-link-task",
           debounceMs: 0,
           model: "test-model",
         },
@@ -377,7 +377,7 @@ describe("NewSpecDispatcher — slug collision under concurrency", () => {
             // Source reads — return the fake file stub.
             if (p === "00-neuro-link/a.md" || p === "00-neuro-link/b.md") return fakeFile;
             // Output dir check.
-            if (p === "00-neuro-link/tasks") return fakeFile;
+            if (p === "07-neuro-link-task") return fakeFile;
             // Task output paths — return truthy only if already written.
             if (writtenPaths.includes(p)) return fakeFile;
             return null;
@@ -429,8 +429,8 @@ describe("NewSpecDispatcher — slug collision under concurrency", () => {
 
     expect(writtenPaths.length).toBe(2);
     expect(new Set(writtenPaths).size).toBe(2); // distinct
-    expect(writtenPaths).toContain("00-neuro-link/tasks/shared-slug.md");
-    expect(writtenPaths).toContain("00-neuro-link/tasks/shared-slug-1.md");
+    expect(writtenPaths).toContain("07-neuro-link-task/shared-slug.md");
+    expect(writtenPaths).toContain("07-neuro-link-task/shared-slug-1.md");
   });
 });
 
@@ -457,7 +457,7 @@ describe("NewSpecDispatcher — cold-start catch-up scan", () => {
         dispatcher: {
           enabled: true,
           watchGlob: "00-neuro-link/*.md",
-          taskOutputDir: "00-neuro-link/tasks",
+          taskOutputDir: "07-neuro-link-task",
           debounceMs: 1,
           model: "test-model",
         },
@@ -493,14 +493,14 @@ describe("NewSpecDispatcher — cold-start catch-up scan", () => {
       { path: "00-neuro-link/fresh.md", stat: { mtime: now - 10_000 } }, // 10s old
       { path: "00-neuro-link/old.md", stat: { mtime: now - 600_000 } }, // 10min old
       { path: "00-neuro-link/subfolder/ignored.md", stat: { mtime: now } },
-      { path: "00-neuro-link/tasks/existing.md", stat: { mtime: now } },
+      { path: "07-neuro-link-task/existing.md", stat: { mtime: now } },
       {
         path: "00-neuro-link/already-processed.md",
         stat: { mtime: now - 5_000 },
       },
     ];
     const taskBodies: Record<string, string> = {
-      "00-neuro-link/tasks/existing.md":
+      "07-neuro-link-task/existing.md":
         '---\ntitle: "Existing"\nsource: "00-neuro-link/already-processed.md"\n---\n',
     };
 

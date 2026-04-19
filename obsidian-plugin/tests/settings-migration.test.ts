@@ -93,11 +93,11 @@ describe("syncLegacyApiKeys", () => {
 //   (c) v2 untouched: migration is idempotent
 //   (d) corrupted llm (non-object): recovers to defaults without throwing
 describe("migrateSettings", () => {
-  test("(a) fresh install initialises schemaVersion=3 with empty llm keys", async () => {
+  test("(a) fresh install initialises schemaVersion=4 with empty llm keys", async () => {
     const { migrateSettings, SETTINGS_SCHEMA_VERSION } = await import("../src/settings");
     const s = migrateSettings({});
     expect(s.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION);
-    expect(s.schemaVersion).toBe(3);
+    expect(s.schemaVersion).toBe(4);
     // Each provider gets its default block with an empty apiKey.
     expect(s.llm.providers.openrouter.apiKey).toBe("");
     expect(s.llm.providers.anthropic.apiKey).toBe("");
@@ -121,7 +121,7 @@ describe("migrateSettings", () => {
     // Legacy keys still present (back-compat for one release per settings.ts:131-133 note).
     expect(s.apiKeys.OPENROUTER_API_KEY).toBe("sk-or-legacy");
     expect(s.apiKeys.ANTHROPIC_API_KEY).toBe("sk-ant-legacy");
-    expect(s.schemaVersion).toBe(3);
+    expect(s.schemaVersion).toBe(4);
   });
 
   test("(c) v2 install round-trips unchanged (idempotent)", async () => {
@@ -223,5 +223,64 @@ describe("migrateSettings (subscription rename)", () => {
     expect(coerceLegacyWsUrl("ws://host/other/path")).toBe(
       "http://host/other/path"
     );
+  });
+});
+
+// ── Task-queue path unification: v3 (`00-neuro-link/tasks`) → v4 (`07-neuro-link-task`) ──
+//
+// The server-side watcher dispatches from `07-neuro-link-task/`; the plugin
+// previously defaulted to writing task specs under `00-neuro-link/tasks/`,
+// which meant specs the dispatcher emitted never reached the server.
+// `migrateSettings` rewrites the default one-shot while preserving
+// intentional user overrides (Codex adversarial-review finding #2).
+describe("migrateSettings (taskOutputDir unification)", () => {
+  test("fresh install uses the canonical 07-neuro-link-task default", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    const s = migrateSettings({});
+    expect(s.dispatcher.taskOutputDir).toBe("07-neuro-link-task");
+  });
+
+  test("rewrites the legacy '00-neuro-link/tasks' default to the canonical path", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    const s = migrateSettings({
+      dispatcher: {
+        enabled: true,
+        watchGlob: "00-neuro-link/*.md",
+        taskOutputDir: "00-neuro-link/tasks",
+        debounceMs: 500,
+        model: "",
+      },
+    });
+    expect(s.dispatcher.taskOutputDir).toBe("07-neuro-link-task");
+  });
+
+  test("preserves a user-chosen override that isn't the legacy default", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    const s = migrateSettings({
+      dispatcher: {
+        enabled: true,
+        watchGlob: "00-neuro-link/*.md",
+        taskOutputDir: "custom/tasks",
+        debounceMs: 500,
+        model: "",
+      },
+    });
+    expect(s.dispatcher.taskOutputDir).toBe("custom/tasks");
+  });
+
+  test("migration is idempotent — canonical path round-trips unchanged", async () => {
+    const { migrateSettings } = await import("../src/settings");
+    const first = migrateSettings({
+      dispatcher: {
+        enabled: true,
+        watchGlob: "00-neuro-link/*.md",
+        taskOutputDir: "00-neuro-link/tasks",
+        debounceMs: 500,
+        model: "",
+      },
+    });
+    const second = migrateSettings(first);
+    expect(second.dispatcher.taskOutputDir).toBe("07-neuro-link-task");
+    expect(second.schemaVersion).toBe(4);
   });
 });

@@ -2,8 +2,9 @@
  * New-spec dispatcher.
  *
  * Fires when a file is created under `00-neuro-link/*.md` (TOP-LEVEL ONLY —
- * we explicitly skip `00-neuro-link/tasks/` so the task specs we emit don't
- * re-trigger the loop).
+ * subfolders are filtered out via the watch glob + `isWatchedPath`. Output
+ * lands under the `taskOutputDir` setting, which defaults to
+ * `07-neuro-link-task/` — the folder the server watcher reads from).
  *
  * Flow:
  *   1. Debounce 500ms after FileCreated so the editor has a chance to flush
@@ -16,8 +17,9 @@
  *   4. Call `plugin.llm.tool_use(...)` — a single call, the model emits the
  *      task spec JSON via a `emit_task_spec` tool. If tool_use isn't supported
  *      by the active provider we degrade to parsing the plain-text output.
- *   5. Write to `00-neuro-link/tasks/<slug>.md`, handling slug collisions by
- *      suffixing `-1`, `-2`, ... until a free name is found.
+ *   5. Write to `<taskOutputDir>/<slug>.md` (default `07-neuro-link-task/`),
+ *      handling slug collisions by suffixing `-1`, `-2`, ... until a free
+ *      name is found.
  */
 
 import { Notice, TFile } from "obsidian";
@@ -85,8 +87,9 @@ export class NewSpecDispatcher {
   /**
    * Cold-start catch-up scan. Walks `00-neuro-link/*.md` (top-level only)
    * for files modified in the last `lookbackMs` whose `source:` frontmatter
-   * doesn't yet appear in any `00-neuro-link/tasks/*.md`, and queues each
-   * one through `handle({kind: "FileCreated", ...})`.
+   * doesn't yet appear in any `<taskOutputDir>/*.md` (default
+   * `07-neuro-link-task/`), and queues each one through
+   * `handle({kind: "FileCreated", ...})`.
    *
    * This covers the window between `plugin.onload` finishing and the
    * vault-event subscription actually connecting — during that 50-300 ms
@@ -146,6 +149,24 @@ export class NewSpecDispatcher {
   }
 
   /**
+   * Overflow recovery replay. When the vault-events transport drops
+   * events (server-side queue overflow), the subscription hands us an
+   * `Overflow` signal but no payloads. This method re-runs the same
+   * scan the cold-start uses with a widened lookback window so we pick
+   * up any file the user dropped during the overflow interval.
+   *
+   * Internally delegates to `scanCatchUp` — the dispatcher already
+   * dedupes via the `processedSources` cross-ref, so firing this after
+   * every overflow is idempotent. Named separately for call-site clarity
+   * (cold-start vs. overflow-recovery are conceptually different even
+   * though the implementation is shared). See Codex adversarial-review
+   * finding #5.
+   */
+  async rescan(lookbackMs: number): Promise<number> {
+    return this.scanCatchUp(lookbackMs);
+  }
+
+  /**
    * Entry point called from the subscription. Also safe to call directly
    * from the Obsidian `vault.on("create", ...)` event as a backup path
    * (not wired by default — the MCP subscription is authoritative).
@@ -174,7 +195,7 @@ export class NewSpecDispatcher {
     else this.plugin.lifetimeSignal.addEventListener("abort", onAbort, { once: true });
   }
 
-  /** True for `00-neuro-link/<file>.md` but not `00-neuro-link/tasks/<...>`. */
+  /** True for `00-neuro-link/<file>.md`; rejects any subfolder. */
   private isWatchedPath(vaultPath: string): boolean {
     const normalised = vaultPath.replace(/\\/g, "/");
     if (!normalised.endsWith(".md")) return false;

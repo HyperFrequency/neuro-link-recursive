@@ -566,3 +566,195 @@ describe("NewSpecDispatcher — cold-start catch-up scan", () => {
     expect(count).toBe(0);
   });
 });
+
+// ── Codex finding #5: Overflow recovery via rescan ──────────────────────
+//
+// When the vault-events transport emits a synthetic Overflow event with
+// `droppedCount > 0`, the plugin's subscription callback should:
+//   (a) call dispatcher.rescan(lookbackMs) with lookback >= 60_000,
+//   (b) surface a user-visible Notice naming the dropped count,
+//   (c) be idempotent — firing the same Overflow twice must not produce
+//       duplicate task specs (the dispatcher's processedSources cross-ref
+//       handles this).
+//
+// We reproduce main.ts's `triggerOverflowCatchUp` callback inline so the
+// test doesn't require instantiating the full Obsidian Plugin class
+// (which pulls in child_process / fs side effects on load). The logic
+// under test is small — any drift between this test and main.ts will
+// show up as a clear diff.
+describe("NewSpecDispatcher — Overflow recovery (Codex finding #5)", () => {
+  interface RescanCall {
+    lookbackMs: number;
+  }
+  interface NoticeCall {
+    message: string;
+  }
+
+  async function buildOverflowHarness(opts: {
+    lastFetchTimestamp: number | null;
+    files: Array<{ path: string; stat: { mtime: number } }>;
+    taskBodies?: Record<string, string>;
+  }): Promise<{
+    fireOverflow: (droppedCount: number, eventTimestamp: number) => Promise<void>;
+    rescanCalls: RescanCall[];
+    notices: NoticeCall[];
+    queued: string[];
+  }> {
+    const { NewSpecDispatcher } = await import("../src/dispatcher/new-spec");
+
+    const rescanCalls: RescanCall[] = [];
+    const notices: NoticeCall[] = [];
+    const queued: string[] = [];
+
+    const taskBodies = opts.taskBodies ?? {};
+    const plugin = {
+      settings: {
+        dispatcher: {
+          enabled: true,
+          watchGlob: "00-neuro-link/*.md",
+          taskOutputDir: "00-neuro-link/tasks",
+          debounceMs: 1,
+          model: "test-model",
+        },
+        vaultPath: "/fake/vault",
+      },
+      lifetimeSignal: new AbortController().signal,
+      app: {
+        vault: {
+          getMarkdownFiles: (): typeof opts.files => opts.files,
+          getAbstractFileByPath: (): unknown => null,
+          read: async (f: { path: string }): Promise<string> =>
+            taskBodies[f.path] ?? "",
+          create: async (): Promise<void> => {
+            /* no-op */
+          },
+          createFolder: async (): Promise<void> => {
+            /* no-op */
+          },
+        },
+      },
+      llm: {
+        defaultModel: (): string => "test-model",
+        tool_use: async (): Promise<unknown> => {
+          throw new Error("tool_use should not run in overflow test");
+        },
+      },
+    };
+
+    const dispatcher = new NewSpecDispatcher(plugin as unknown as never);
+
+    // Spy on handle() to record rescan-queued paths without triggering
+    // the real debounce + LLM machinery.
+    (dispatcher as unknown as { handle: (e: { path: string }) => void }).handle = (e) => {
+      queued.push(e.path);
+    };
+    // Wrap rescan to record its lookback argument; delegate to the real
+    // implementation so we exercise scanCatchUp end-to-end.
+    const realRescan = (
+      dispatcher as unknown as { rescan: (ms: number) => Promise<number> }
+    ).rescan.bind(dispatcher);
+    (dispatcher as unknown as { rescan: (ms: number) => Promise<number> }).rescan = async (
+      ms: number
+    ): Promise<number> => {
+      rescanCalls.push({ lookbackMs: ms });
+      return realRescan(ms);
+    };
+
+    const fakeSubscription = {
+      getLastSuccessfulFetchTimestamp: (): number | null => opts.lastFetchTimestamp,
+    };
+
+    // This reproduces main.ts `triggerOverflowCatchUp` verbatim — keep
+    // it in sync with the production path. See src/main.ts.
+    const fireOverflow = async (
+      droppedCount: number,
+      eventTimestamp: number
+    ): Promise<void> => {
+      const MIN_LOOKBACK_MS = 60_000;
+      const lastFetch = fakeSubscription.getLastSuccessfulFetchTimestamp();
+      const droppedPeriodHeuristic = lastFetch !== null ? eventTimestamp - lastFetch : 0;
+      const lookbackMs = Math.max(MIN_LOOKBACK_MS, droppedPeriodHeuristic);
+      notices.push({
+        message: `vault-events backpressure: ${droppedCount} events dropped; catch-up scan running`,
+      });
+      await (
+        dispatcher as unknown as { rescan: (ms: number) => Promise<number> }
+      ).rescan(lookbackMs);
+    };
+
+    return { fireOverflow, rescanCalls, notices, queued };
+  }
+
+  test("Overflow with droppedCount > 0 triggers rescan with lookback >= 60_000", async () => {
+    const now = Date.now();
+    const { fireOverflow, rescanCalls } = await buildOverflowHarness({
+      // No prior successful fetch yet — the heuristic falls through to
+      // the 60 s floor.
+      lastFetchTimestamp: null,
+      files: [{ path: "00-neuro-link/missed.md", stat: { mtime: now - 1_000 } }],
+    });
+
+    await fireOverflow(3, now);
+
+    expect(rescanCalls).toHaveLength(1);
+    expect(rescanCalls[0].lookbackMs).toBeGreaterThanOrEqual(60_000);
+  });
+
+  test("lookback widens to cover the silent interval when it exceeds the floor", async () => {
+    const now = Date.now();
+    // 5-minute gap between the last successful fetch and the overflow:
+    // the rescan window should widen to match.
+    const fiveMinutesAgo = now - 5 * 60_000;
+    const { fireOverflow, rescanCalls } = await buildOverflowHarness({
+      lastFetchTimestamp: fiveMinutesAgo,
+      files: [],
+    });
+
+    await fireOverflow(7, now);
+
+    expect(rescanCalls).toHaveLength(1);
+    expect(rescanCalls[0].lookbackMs).toBeGreaterThanOrEqual(5 * 60_000);
+  });
+
+  test("Overflow surfaces a user-visible Notice naming the dropped count", async () => {
+    const { fireOverflow, notices } = await buildOverflowHarness({
+      lastFetchTimestamp: null,
+      files: [],
+    });
+
+    await fireOverflow(42, Date.now());
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0].message).toContain("42 events dropped");
+    expect(notices[0].message).toContain("catch-up scan running");
+  });
+
+  test("double-firing Overflow does not write the same task spec twice", async () => {
+    // Idempotency: after the first rescan would have written a task spec
+    // for missed.md, the second rescan's processedSources cross-ref sees
+    // the pre-existing spec and filters the source out.
+    const now = Date.now();
+    const { fireOverflow, queued } = await buildOverflowHarness({
+      lastFetchTimestamp: now - 30_000,
+      files: [
+        { path: "00-neuro-link/missed.md", stat: { mtime: now - 10_000 } },
+        // Pre-existing task spec recording missed.md as already processed.
+        {
+          path: "00-neuro-link/tasks/missed-task.md",
+          stat: { mtime: now - 5_000 },
+        },
+      ],
+      taskBodies: {
+        "00-neuro-link/tasks/missed-task.md":
+          '---\ntitle: "Missed"\nsource: "00-neuro-link/missed.md"\n---\n',
+      },
+    });
+
+    await fireOverflow(1, now);
+    const afterFirst = queued.length;
+    await fireOverflow(1, now);
+
+    expect(afterFirst).toBe(0);
+    expect(queued.length).toBe(0);
+  });
+});

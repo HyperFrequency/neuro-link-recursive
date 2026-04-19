@@ -613,8 +613,55 @@ describe("VaultEventsClient.longPoll", () => {
     const overflow = events.find((e) => e.kind === "Overflow" && e.path === "<overflow>");
     expect(overflow).toBeDefined();
     expect(overflow!.droppedCount).toBe(4);
+    // Overflow must carry a timestamp so main.ts can compute the
+    // dropped-period heuristic (see Codex finding #5).
+    expect(typeof overflow!.timestamp).toBe("number");
     const created = events.find((e) => e.kind === "FileCreated" && e.path === "c.md");
     expect(created).toBeDefined();
+  });
+
+  test("test_last_successful_fetch_timestamp: getter updates after each success", async () => {
+    const { client, events } = buildClient({
+      nextResponses: [
+        {
+          status: 200,
+          json: {
+            jsonrpc: "2.0",
+            id: 1,
+            result: { handle: "h", created_at: null },
+          },
+        },
+        {
+          status: 200,
+          json: {
+            jsonrpc: "2.0",
+            id: 2,
+            result: {
+              events: [{ seq: 1, event: { kind: "FileCreated", path: "a.md" } }],
+              next_seq: 1,
+              dropped: 0,
+            },
+          },
+        },
+        // Then park.
+      ],
+    });
+
+    // Before connect, no successful fetch has happened.
+    expect(client.getLastSuccessfulFetchTimestamp()).toBeNull();
+
+    const before = Date.now();
+    await client.connect();
+    await waitForEvents(events, 1);
+    const after = Date.now();
+    await client.disconnect();
+
+    const ts = client.getLastSuccessfulFetchTimestamp();
+    expect(ts).not.toBeNull();
+    // The timestamp is stamped at post-fetch; it must fall within the
+    // window the test bracketed.
+    expect(ts!).toBeGreaterThanOrEqual(before);
+    expect(ts!).toBeLessThanOrEqual(after);
   });
 });
 

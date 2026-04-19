@@ -123,6 +123,20 @@ export class VaultEventsClient {
   private terminated = false;
   /** Promise that resolves when the long-poll loop exits — for tests. */
   private loopDonePromise: Promise<void> | null = null;
+  /**
+   * Epoch-ms timestamp of the most recent successful `fetch_vault_events`
+   * call. Updated on every non-aborted fetch — including empty pages —
+   * because "empty" still means the server-side cursor is live and we
+   * haven't missed anything. Main.ts consumes this via the getter to
+   * compute a dropped-period heuristic when an overflow fires:
+   *   lookback ≈ eventTimestamp - lastSuccessfulFetchTimestamp
+   * so the rescan window covers the exact interval the connection was
+   * silent. See Codex adversarial-review finding #5.
+   *
+   * `null` until the first successful fetch completes; callers must
+   * fall back to a sane minimum lookback in that case.
+   */
+  private lastSuccessfulFetchTimestamp: number | null = null;
 
   constructor(plugin: NLRPlugin, handler: EventHandler) {
     this.plugin = plugin;
@@ -187,6 +201,16 @@ export class VaultEventsClient {
       const err = e as Error;
       console.warn(`NLR vault-events: loop crashed — ${err.message}`);
     });
+  }
+
+  /**
+   * Epoch-ms of the most recent successful fetch, or `null` if no fetch
+   * has completed yet. Read-only view of internal state — exposed so the
+   * main plugin can compute an overflow-recovery lookback window without
+   * poking at private fields.
+   */
+  getLastSuccessfulFetchTimestamp(): number | null {
+    return this.lastSuccessfulFetchTimestamp;
   }
 
   async disconnect(): Promise<void> {
@@ -323,12 +347,19 @@ export class VaultEventsClient {
         // Reset backoff on any successful fetch (even an empty one).
         backoffIdx = 0;
         if (!page) continue; // aborted mid-flight; loop header will exit.
+        // Stamp the post-fetch wall-clock. Consumed by Overflow recovery
+        // in main.ts to widen its rescan window to match the silent
+        // interval; the emitted Overflow event carries the same `now`
+        // so the consumer can diff against the prior fetch success.
+        const now = Date.now();
+        this.lastSuccessfulFetchTimestamp = now;
 
         if (page.dropped > 0) {
           await this.emit({
             kind: "Overflow",
             path: "<overflow>",
             droppedCount: page.dropped,
+            timestamp: now,
           });
         }
 

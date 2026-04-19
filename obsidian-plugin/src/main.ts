@@ -113,14 +113,23 @@ export default class NLRPlugin extends Plugin {
 
     this.subscription = new VaultEventsClient(this, async (event) => {
       if (!this.dispatcher) return;
-      // Drop the synthetic Overflow kind the HTTP client uses for
-      // bookkeeping — the dispatcher only knows the four real vault
-      // event kinds. Log the overflow so it's visible in the devtools
-      // without pulling in a new UI path.
+      // Synthetic Overflow — the transport just told us the server
+      // dropped events. We can't replay them through the normal event
+      // stream (the server never buffered them past its queue cap), so
+      // trigger a wide-lookback vault scan to pick up any file the user
+      // dropped during the silent interval. The dispatcher's
+      // `processedSources` cross-ref makes this replay idempotent.
+      // See Codex adversarial-review finding #5.
       if (event.kind === "Overflow") {
-        console.warn(
-          `NLR vault-events: ${event.path} (dropped=${event.droppedCount ?? 0})`
-        );
+        const dropped = event.droppedCount ?? 0;
+        console.warn(`NLR vault-events: ${event.path} (dropped=${dropped})`);
+        // The terminal sentinel (droppedCount === -1) is a different
+        // failure mode — "will never reconnect" — and not something a
+        // rescan can fix. Leave the existing console.warn as the only
+        // signal for that case.
+        if (dropped > 0) {
+          this.triggerOverflowCatchUp(dropped, event.timestamp ?? Date.now());
+        }
         return;
       }
       this.dispatcher.handle(event);
@@ -139,6 +148,36 @@ export default class NLRPlugin extends Plugin {
     this.dispatcher.scanCatchUp().catch((e: unknown) => {
       const err = e as Error;
       console.warn("NLR dispatcher: cold-start scan failed:", err.message);
+    });
+  }
+
+  /**
+   * Invoked from the vault-events Overflow handler. Computes a lookback
+   * window that covers the silent interval (event-time minus the last
+   * successful fetch), floors it at 60 s for safety, and asks the
+   * dispatcher to rescan. Surfaces a single Notice so the user knows
+   * why they suddenly see a burst of task-spec generations.
+   *
+   * Kept as a separate method so it's easy to test and so the callback
+   * in `startVaultSubscription` stays compact.
+   */
+  private triggerOverflowCatchUp(droppedCount: number, eventTimestamp: number): void {
+    if (!this.dispatcher) return;
+
+    const MIN_LOOKBACK_MS = 60_000;
+    const lastFetch = this.subscription?.getLastSuccessfulFetchTimestamp() ?? null;
+    const droppedPeriodHeuristic = lastFetch !== null ? eventTimestamp - lastFetch : 0;
+    // Floor at MIN_LOOKBACK and guard against negative heuristics (clock
+    // skew / test doubles): the scan is idempotent so a slightly wider
+    // window is strictly safer than a narrower one.
+    const lookbackMs = Math.max(MIN_LOOKBACK_MS, droppedPeriodHeuristic);
+
+    new Notice(
+      `vault-events backpressure: ${droppedCount} events dropped; catch-up scan running`
+    );
+    this.dispatcher.rescan(lookbackMs).catch((e: unknown) => {
+      const err = e as Error;
+      console.warn("NLR dispatcher: overflow-recovery rescan failed:", err.message);
     });
   }
 

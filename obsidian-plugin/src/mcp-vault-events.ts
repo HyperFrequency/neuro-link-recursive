@@ -351,70 +351,80 @@ export class VaultEventsClient {
   /**
    * POST an MCP `tools/call` to the configured endpoint. Returns the
    * decoded `result` block. Throws on HTTP / JSON-RPC errors.
+   *
+   * Tracks the controller in `this.inflight` so `disconnect()` can abort
+   * an in-flight subscribe/fetch fast. One-shot calls that shouldn't
+   * participate in that lifecycle use `issueRpc()` instead.
    */
   private async rpc(
     toolName: string,
     args: unknown,
     opts?: { timeoutMs?: number; retryOnAuth?: boolean }
   ): Promise<unknown> {
+    void opts?.retryOnAuth; // accepted for call-site symmetry; unused here
+    const controller = new AbortController();
+    this.inflight = controller;
+    try {
+      return await this.postJsonRpc({
+        controller,
+        method: "tools/call",
+        params: { name: toolName, arguments: args },
+        timeoutMs: opts?.timeoutMs ?? FETCH_TIMEOUT_MS,
+      });
+    } finally {
+      if (this.inflight === controller) this.inflight = null;
+    }
+  }
+
+  /**
+   * Core HTTP POST + JSON-RPC-envelope decoder. Both `rpc()` (subscription
+   * lifecycle) and `issueRpc()` (one-shot tool calls) share this so the
+   * auth, URL, header, and error-classification rules stay in one place.
+   */
+  private async postJsonRpc(req: {
+    controller: AbortController;
+    method: string;
+    params: unknown;
+    timeoutMs: number;
+  }): Promise<unknown> {
     const url = this.resolveEndpointUrl();
     const token = this.readBearerToken();
     const id = this.nextRequestId++;
     const body: JSONRPCRequest = {
       jsonrpc: "2.0",
       id,
-      method: "tools/call",
-      params: { name: toolName, arguments: args },
+      method: req.method,
+      params: req.params,
     };
-
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json",
     };
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const controller = new AbortController();
-    this.inflight = controller;
-    const timeoutMs = opts?.timeoutMs ?? FETCH_TIMEOUT_MS;
-    const timeoutTimer = setTimeout(() => {
-      controller.abort();
-    }, timeoutMs);
-
+    const timeoutTimer = setTimeout(() => req.controller.abort(), req.timeoutMs);
     try {
       const resp = await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: req.controller.signal,
       });
-
       if (resp.status === 401 || resp.status === 403) {
-        const err = new Error(`HTTP ${resp.status}`) as Error & {
-          status: number;
-        };
+        const err = new Error(`HTTP ${resp.status}`) as Error & { status: number };
         err.status = resp.status;
         throw err;
       }
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const parsed = (await resp.json()) as JSONRPCResponse;
       if (parsed.error) {
         const err = new Error(parsed.error.message) as Error & { code: number };
         err.code = parsed.error.code;
         throw err;
       }
-      // MCP tools/call wraps the actual tool result inside a `content[]`
-      // envelope. The extractors below know how to unwrap both shapes.
       return parsed.result;
     } finally {
       clearTimeout(timeoutTimer);
-      // Only clear inflight if it's still ours — disconnect() may have
-      // already cleared it.
-      if (this.inflight === controller) this.inflight = null;
     }
   }
 
@@ -442,6 +452,40 @@ export class VaultEventsClient {
       return match ? match[1].trim() : "";
     } catch {
       return "";
+    }
+  }
+
+  // ── generic tool-call surface (Codex finding #1) ─────────────────────
+  //
+  // `callTool` and `listTools` are one-shot JSON-RPC calls the @neuro
+  // executor uses to dispatch `tv_*` / `nlr_*` tools. They deliberately
+  // use a local AbortController (not `this.inflight`) so an agent turn
+  // doesn't cancel the long-poll subscription, or vice versa. Plugin
+  // unload still aborts both paths — `lifetimeSignal` is propagated.
+
+  async callTool(name: string, args: unknown): Promise<unknown> {
+    return this.issueRpc("tools/call", { name, arguments: args }, FETCH_TIMEOUT_MS);
+  }
+
+  async listTools(): Promise<Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>> {
+    const result = await this.issueRpc("tools/list", {}, 10_000);
+    return extractToolsList(result);
+  }
+
+  private async issueRpc(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+    const lifetime = this.plugin.lifetimeSignal;
+    if (lifetime.aborted) {
+      const err = new Error("aborted") as Error & { name: string };
+      err.name = "AbortError";
+      throw err;
+    }
+    const controller = new AbortController();
+    const onLifetimeAbort = (): void => controller.abort();
+    lifetime.addEventListener("abort", onLifetimeAbort, { once: true });
+    try {
+      return await this.postJsonRpc({ controller, method, params, timeoutMs });
+    } finally {
+      lifetime.removeEventListener("abort", onLifetimeAbort);
     }
   }
 }
@@ -491,6 +535,59 @@ export function extractSubscribeResult(
     }
   }
   return null;
+}
+
+interface ToolSpec {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+/**
+ * Normalise a JSON-RPC `tools/list` response. Tolerates both the bare shape
+ * (`{ tools: [...] }`) and the MCP content envelope (`{ content: [{ text:
+ * JSON }] }`). Returns [] if the payload is malformed.
+ */
+export function extractToolsList(result: unknown): ToolSpec[] {
+  if (!result || typeof result !== "object") return [];
+
+  const pickList = (o: Record<string, unknown>): ToolSpec[] | null => {
+    const tools = o.tools;
+    if (!Array.isArray(tools)) return null;
+    const out: ToolSpec[] = [];
+    for (const entry of tools) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as Record<string, unknown>;
+      if (typeof e.name !== "string") continue;
+      const item: ToolSpec = { name: e.name };
+      if (typeof e.description === "string") item.description = e.description;
+      // MCP servers split on casing: `inputSchema` (camel) vs `input_schema`
+      // (snake). Accept both so the loader works against either.
+      const schema = e.inputSchema ?? e.input_schema;
+      if (schema && typeof schema === "object") {
+        item.inputSchema = schema as Record<string, unknown>;
+      }
+      out.push(item);
+    }
+    return out;
+  };
+
+  const direct = pickList(result as Record<string, unknown>);
+  if (direct) return direct;
+
+  const content = (result as { content?: Array<{ text?: string }> }).content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (typeof block?.text !== "string") continue;
+      try {
+        const inner = pickList(JSON.parse(block.text) as Record<string, unknown>);
+        if (inner) return inner;
+      } catch {
+        /* not JSON — try next block */
+      }
+    }
+  }
+  return [];
 }
 
 export function extractFetchResult(result: unknown): FetchPage | null {

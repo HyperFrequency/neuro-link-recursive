@@ -149,24 +149,6 @@ export class NewSpecDispatcher {
   }
 
   /**
-   * Overflow recovery replay. When the vault-events transport drops
-   * events (server-side queue overflow), the subscription hands us an
-   * `Overflow` signal but no payloads. This method re-runs the same
-   * scan the cold-start uses with a widened lookback window so we pick
-   * up any file the user dropped during the overflow interval.
-   *
-   * Internally delegates to `scanCatchUp` — the dispatcher already
-   * dedupes via the `processedSources` cross-ref, so firing this after
-   * every overflow is idempotent. Named separately for call-site clarity
-   * (cold-start vs. overflow-recovery are conceptually different even
-   * though the implementation is shared). See Codex adversarial-review
-   * finding #5.
-   */
-  async rescan(lookbackMs: number): Promise<number> {
-    return this.scanCatchUp(lookbackMs);
-  }
-
-  /**
    * Entry point called from the subscription. Also safe to call directly
    * from the Obsidian `vault.on("create", ...)` event as a backup path
    * (not wired by default — the MCP subscription is authoritative).

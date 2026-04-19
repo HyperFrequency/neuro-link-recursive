@@ -81,6 +81,7 @@ STATUS_SCRIPT="${NLR_ROOT}/.claude/skills/neuro-link/scripts/status.sh"
 MODE="local"           # local | cloud | hybrid
 DRY_RUN=0
 WITH_TUNNEL=0
+FORCE_TURBOVAULT=0     # --force-turbovault: reinstall regardless of provenance
 
 print_help() {
   cat <<EOF
@@ -94,6 +95,9 @@ Options:
   --dry-run                   Print what would happen without executing anything
   --with-tunnel               After verification, start the public tunnel
                               (scripts/start_public_tunnel.sh). Off by default.
+  --force-turbovault          Force reinstall of turbovault from the fork even
+                              if a binary is already present. Useful when a
+                              crates.io install is masking the fork.
   -h, --help                  Show this message
 
 Environment:
@@ -111,6 +115,7 @@ while [[ $# -gt 0 ]]; do
     --mode) shift; MODE="${1:-local}" ;;
     --dry-run)     DRY_RUN=1 ;;
     --with-tunnel) WITH_TUNNEL=1 ;;
+    --force-turbovault) FORCE_TURBOVAULT=1 ;;
     -h|--help)     print_help; exit 0 ;;
     *)             warn "unknown flag: $1 (use --help for options)" ;;
   esac
@@ -229,15 +234,39 @@ step "3/12  TurboVault (fork: ahuserious/turbovault, features=full)"
 # fixes the FileRenamed emission bug. --features full enables STDIO + HTTP +
 # WebSocket + TCP + Unix transports. Idempotent: cargo install reuses cached
 # builds when the git SHA matches.
+#
+# A pre-existing turbovault binary is NOT sufficient: a crates.io install
+# silently satisfies the "binary exists" check while lacking subscribe_vault_events.
+# We verify provenance via ~/.cargo/.crates.toml and probe --help for the
+# required tool name before trusting an existing install.
 
 TV_BIN="$HOME/.cargo/bin/turbovault"
-if [[ -x "$TV_BIN" ]]; then
-  TV_VER="$("$TV_BIN" --version 2>/dev/null | head -1 || echo unknown)"
-  ok "turbovault already installed: $TV_VER"
-  track_ok "TurboVault"
-else
-  info "Installing turbovault from ahuserious/turbovault with --features full..."
-  if run cargo install --git https://github.com/ahuserious/turbovault --features full; then
+TV_FORK_URL="https://github.com/ahuserious/turbovault"
+TV_CRATES_TOML="$HOME/.cargo/.crates.toml"
+
+# Returns 0 if the installed turbovault's source in .crates.toml matches the
+# fork URL. Returns non-zero otherwise (crates.io install, missing record,
+# or a different git remote).
+turbovault_provenance_ok() {
+  [[ -f "$TV_CRATES_TOML" ]] || return 1
+  # .crates.toml lines look like:
+  #   "turbovault 0.X.Y (git+https://github.com/ahuserious/turbovault#<sha>)" = [...]
+  #   "turbovault 0.X.Y (registry+https://github.com/rust-lang/crates.io-index)" = [...]
+  grep -E '^"turbovault ' "$TV_CRATES_TOML" 2>/dev/null \
+    | grep -Fq "git+${TV_FORK_URL}"
+}
+
+# Returns 0 if `turbovault --help` advertises subscribe_vault_events. Some
+# builds may list tools under a subcommand; we accept a match anywhere in the
+# top-level help output as a lightweight capability probe.
+turbovault_capability_ok() {
+  [[ -x "$TV_BIN" ]] || return 1
+  "$TV_BIN" --help 2>&1 | grep -Fq subscribe_vault_events
+}
+
+install_turbovault_fork() {
+  info "Installing turbovault from ${TV_FORK_URL} (--features full --locked)..."
+  if run cargo install --force --git "$TV_FORK_URL" --features full --locked; then
     if [[ $DRY_RUN -eq 0 ]]; then
       ok "turbovault installed to $TV_BIN"
     else
@@ -246,8 +275,37 @@ else
     track_ok "TurboVault"
   else
     track_fail "TurboVault"
-    die "cargo install turbovault failed" "cd /tmp && cargo install --git https://github.com/ahuserious/turbovault --features full -v"
+    die "cargo install turbovault failed" "cd /tmp && cargo install --force --git ${TV_FORK_URL} --features full --locked -v"
   fi
+}
+
+if [[ $FORCE_TURBOVAULT -eq 1 ]]; then
+  info "--force-turbovault set: reinstalling from the fork unconditionally"
+  install_turbovault_fork
+elif [[ -x "$TV_BIN" ]]; then
+  if turbovault_provenance_ok; then
+    # Fork is installed. Do a capability probe so a stale build missing
+    # subscribe_vault_events is caught here rather than at first subscribe.
+    if [[ $DRY_RUN -eq 1 ]] || turbovault_capability_ok; then
+      TV_VER="$("$TV_BIN" --version 2>/dev/null | head -1 || echo unknown)"
+      ok "turbovault already installed from fork: $TV_VER"
+      track_ok "TurboVault"
+    else
+      warn "turbovault binary at $TV_BIN is from the fork but --help does not advertise subscribe_vault_events"
+      warn "  (likely a stale build predating the subscribe_vault_events tool)"
+      info "Reinstalling turbovault from the fork..."
+      install_turbovault_fork
+    fi
+  else
+    warn "turbovault found at $TV_BIN but provenance is NOT the fork:"
+    warn "  expected source: git+${TV_FORK_URL}"
+    warn "  see:             $TV_CRATES_TOML"
+    warn "  the stock crates.io build lacks subscribe_vault_events and the FileRenamed fix"
+    info "Reinstalling from the fork (will overwrite the existing binary)..."
+    install_turbovault_fork
+  fi
+else
+  install_turbovault_fork
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
